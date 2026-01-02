@@ -5,6 +5,8 @@ MULTI-SMR is a featured open-source firmware project that delivers a high-reliab
 
 The project is intentionally designed around the ESP8266, not as a legacy choice, but as an engineering decision driven by power budget, electrical simplicity, and long-term stability.
 
+<img width="508" height="677" alt="image" src="https://github.com/user-attachments/assets/e07f7834-ab3e-4637-a4a8-591bd588fd95" />
+
 This firmware enables direct connection to Dutch DSMR smart meters without external inverting hardware, without level shifters, and without an external power supply — operating entirely within the electrical constraints defined by the DSMR specification.
 
 Why This Project Exists
