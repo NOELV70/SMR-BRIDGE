@@ -45,7 +45,7 @@ This eliminates:
 Optocouplers
   Additional resistors and failure points
 
-✔ Powered Directly from the Smart Meter
+Powered Directly from the Smart Meter
 
 Dutch DSMR specifications allow the P1 port to supply up to ~100 mA.
 MULTI-SMR is engineered to stay within this limit, allowing the ESP8266 module to be powered directly from the smart meter output.
@@ -58,14 +58,14 @@ ESP32	150–300+ mA	❌ No
 
 Using an ESP32 would violate the DSMR power budget and require an external power source — directly contradicting the design goals of this project.
 
-Key Features
+**Key Features**
 🔌 Direct DSMR P1 Interface
 
 Internal UART RX inversion
 
 No external hardware conditioning
 
-Fully compliant with Dutch smart meter signaling
+**Fully compliant with Dutch smart meter signaling**
 
 🌐 Transparent Serial-to-TCP Gateway
 
@@ -73,48 +73,36 @@ Broadcasts DSMR telegrams to up to 10 concurrent TCP clients
 
 Port 2001
 
+
 Zero parsing or protocol interference
 
 🛡 Multi-Layer Stability & Recovery
 
 Hardware watchdog (8s)
-
 Software watchdogs for:
+  WiFi instability
+  TCP stalls
+  Serial silence
+  Grace periods to prevent false resets
 
-WiFi instability
-TCP stalls
-Serial silence
-Grace periods to prevent false resets
-
-📊 Built-In Diagnostics
+**📊 Built-In Diagnostics**
 Live web dashboard
 Heap, uptime, traffic counters
 Reset cause reporting
 RAW DSMR frame inspection
 
-🔐 Secure Management
+**🔐 Secure Management**
 WiFiManager captive portal
 HTTP Digest Authentication
 EEPROM-backed credential storage
 
-🔄 OTA Updates
+**🔄 OTA Updates**
 Arduino IDE OTA
 Browser-based firmware upload
 Safe reboot on completion
 
-System Architecture
-Dutch Smart Meter (DSMR P1)
-          │
-          │  Power + Inverted Serial RX
-          ▼
-     ESP8266 (Single Module)
-          │
-          ├── UART → TCP Broadcast (Port 2001)
-          ├── Watchdog & Stability Layer
-          ├── Web Dashboard & Admin
-          └── OTA Update Engine
 
-Design Philosophy
+**Design Philosophy**
   Less hardware = fewer failure modes
   Electrical compliance over raw performance
   Stability over feature bloat
