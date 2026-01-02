@@ -147,6 +147,11 @@ Acts as a network-based DSMR gateway
 No serial adapters required on the Home Assistant host
 Multiple consumers can read the same data simultaneously
 
+<img width="1295" height="379" alt="image" src="https://github.com/user-attachments/assets/bf83efd6-993d-45e8-b4f4-2af4017d5417" />
+
+<img width="358" height="862" alt="image" src="https://github.com/user-attachments/assets/5329eaaf-41e3-411a-9aa4-3ce189f2ca27" />
+
+
 Proven compatibility with:
 Home Assistant DSMR integration
 DSMR Reader
