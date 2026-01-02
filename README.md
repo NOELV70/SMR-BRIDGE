@@ -1,116 +1,167 @@
-**MULTI-SMR DSMR Bridge**
-
+**MULTI-SMR**
 Ultra-Minimal Smart Meter Gateway — Engineered for Reliability
 
-MULTI-SMR is a featured open-source firmware project that delivers a high-reliability DSMR (P1) serial-to-TCP gateway using the simplest hardware configuration possible.
+MULTI-SMR is a featured open-source firmware project delivering a high-reliability DSMR (P1) serial-to-TCP gateway using the simplest hardware configuration possible.
 
-The project is intentionally designed around the ESP8266, not as a legacy choice, but as an engineering decision driven by power budget, electrical simplicity, and long-term stability.
+The firmware is intentionally engineered around the ESP8266 — not as a legacy choice, but as a deliberate design decision driven by strict power budgets, electrical simplicity, and long-term operational stability.
 
-<img width="508" height="677" alt="image" src="https://github.com/user-attachments/assets/e07f7834-ab3e-4637-a4a8-591bd588fd95" />
+<img width="542" height="866" alt="MULTI-SMR hardware" src="https://github.com/user-attachments/assets/79b9c2e4-87bf-4b81-ae2a-c9e87051bb09" />
 
-This firmware enables direct connection to Dutch DSMR smart meters without external inverting hardware, without level shifters, and without an external power supply — operating entirely within the electrical constraints defined by the DSMR specification.
+**Why This Project Exists**
 
-Why This Project Exists
-
-Most smart-meter gateways are over-engineered:
+Many smart-meter gateways are over-engineered:
 
   External transistor or optocoupler inverters
   Separate power supplies
   Power-hungry microcontrollers
-  Complex hardware stacks that increase failure risk
+  Complex hardware stacks with increased failure risk
 
 MULTI-SMR takes the opposite approach.
 
-  It proves that a single ESP8266, correctly configured at the register level, is sufficient to deliver:
+It demonstrates that a single ESP8266, correctly configured at the register level, is sufficient to deliver:
 
-Stable DSMR data acquisition
+  Stable DSMR data acquisition
+  Multi-client network distribution
+  Secure device management
+  24/7 unattended operation
 
-Multi-client network distribution
-Secure management
-24/7 unattended operation
-…all while remaining electrically compliant with the smart meter itself.
+—all while remaining fully electrically compliant with the smart meter itself.
 
-Minimal Hardware — By Design
+**Minimal Hardware — By Design**
 ✔ Runs on the Simplest Possible Hardware
 
 Single ESP8266 module
-  No external RX inverter
-  No external power supply
-  No additional logic components
+No external RX inverter
+No external power supply
+No additional logic components
 
-  The ESP8266 UART RX line is internally inverted via direct register access, allowing native compatibility with Dutch DSMR P1 ports.
+The ESP8266 UART RX signal is internally inverted via direct register access, enabling native compatibility with Dutch DSMR P1 ports.
 
 This eliminates:
-  NPN transistor stages
+  External transistors
+  Optocouplers
+  Additional and avoidable failure points
 
-Optocouplers
-  Additional resistors and failure points
+<img width="508" height="677" alt="ESP8266 minimal wiring" src="https://github.com/user-attachments/assets/e07f7834-ab3e-4637-a4a8-591bd588fd95" />
 
-Powered Directly from the Smart Meter
+**Powered Directly from the Smart Meter**
 
 Dutch DSMR specifications allow the P1 port to supply up to ~100 mA.
-MULTI-SMR is engineered to stay within this limit, allowing the ESP8266 module to be powered directly from the smart meter output.
 
-This is a key reason the ESP8266 was chosen over the ESP32.
+MULTI-SMR is engineered to remain within this limit, allowing the ESP8266 module to be powered directly from the smart meter output — with no external power source required.
+
+This constraint is a key reason the ESP8266 was chosen over the ESP32.
 
 Platform	Typical Current Draw	DSMR P1 Compatible
-ESP8266	~70–90 mA (peaks controlled)	✅ Yes
+ESP8266	~70–90 mA (controlled peaks)	✅ Yes
 ESP32	150–300+ mA	❌ No
 
-Using an ESP32 would violate the DSMR power budget and require an external power source — directly contradicting the design goals of this project.
+Using an ESP32 would exceed the DSMR power budget and require an external power supply — directly contradicting the design goals of this project.
 
 **Key Features**
 🔌 Direct DSMR P1 Interface
-
 Internal UART RX inversion
-
 No external hardware conditioning
-
-**Fully compliant with Dutch smart meter signaling**
-
+Fully compliant with Dutch smart-meter signaling
 🌐 Transparent Serial-to-TCP Gateway
-
 Broadcasts DSMR telegrams to up to 10 concurrent TCP clients
-
-Port 2001
-
-
+TCP port 2001
 Zero parsing or protocol interference
 
 🛡 Multi-Layer Stability & Recovery
 
-Hardware watchdog (8s)
+Hardware watchdog (8 seconds)
+
 Software watchdogs for:
-  WiFi instability
+  Wi-Fi instability
   TCP stalls
   Serial silence
   Grace periods to prevent false resets
 
-**📊 Built-In Diagnostics**
+📊 Built-In Diagnostics
+
 Live web dashboard
-Heap, uptime, traffic counters
-Reset cause reporting
+Heap, uptime, and traffic counters
+Reset-cause reporting
 RAW DSMR frame inspection
 
-**🔐 Secure Management**
+🔐 Secure Management
+
 WiFiManager captive portal
 HTTP Digest Authentication
+
 EEPROM-backed credential storage
 
-**🔄 OTA Updates**
-Arduino IDE OTA
-Browser-based firmware upload
-Safe reboot on completion
+🔄 OTA Updates
 
+Arduino IDE OTA
+
+Browser-based firmware upload
+Safe reboot after update completion
+Zero-Touch Wi-Fi Provisioning (Captive Portal)
+MULTI-SMR can be deployed by end users without preconfigured credentials, serial consoles, or firmware modification.
+
+On first boot — or when no valid Wi-Fi credentials are present — the device automatically launches a self-hosted captive portal.
+
+**How It Works**
+ESP8266 starts in Access Point (AP) mode
+Temporary Wi-Fi network is broadcast (e.g. SMR-BRIDGE-XXXX)
+User connects using phone, tablet, or laptop with WIFI to SMR-access-point !
+
+Browser is automatically redirected to the setup portal
+Local Wi-Fi network is selected and credentials entered
+
+Credentials are stored securely in non-volatile memory
+Device reboots and joins the configured network
+No additional tools or apps are required.
+
+_Designed for End Users — Not Developers_ :-) :-) :-) 
+
+**This approach ensures:**
+No hardcoded SSIDs or passwords
+Firmware remains generic and redistributable
+
+_Installation by non-technical users
+_
+Network changes handled on-site without reflashing
+
+The captive portal can be re-invoked at any time via credential reset or factory reset.
+
+**Secure by Default**
+Wi-Fi credentials stored in EEPROM
+Captive portal disabled automatically after connection
+All administrative interfaces protected by
+HTTP Digest Authentication
+OTA and configuration endpoints require authentication
+This prevents unauthorized access after commissioning while keeping initial setup frictionless.
+
+**Seamless Integration with Home Automation Platforms**
+
+MULTI-SMR integrates effortlessly with modern home-automation and energy-monitoring platforms.
+
+By exposing the DSMR data as a transparent TCP stream, the firmware remains platform-agnostic, avoiding proprietary formats or vendor lock-in.
+
+Home Assistant Compatibility
+
+Acts as a network-based DSMR gateway
+No serial adapters required on the Home Assistant host
+Multiple consumers can read the same data simultaneously
+
+Proven compatibility with:
+Home Assistant DSMR integration
+DSMR Reader
+Custom TCP-based parsers and loggers
 
 **Design Philosophy**
-  Less hardware = fewer failure modes
-  Electrical compliance over raw performance
-  Stability over feature bloat
-  Field reliability over theoretical throughput
-  
-  
-This project is not about “what’s possible” —
-it’s about what’s correct.
 
-(C) Noel Vellemans ! 
+Less hardware = fewer failure modes
+Electrical compliance over raw performance
+Stability over feature bloat
+Field reliability over theoretical throughput
+
+
+**This project is not about what’s possible —
+it’s about what’s easy, reliable, user-friendly, and cost-effective.**
+
+© Noel Vellemans
+Open-source firmware — built to run where others over-engineer.
