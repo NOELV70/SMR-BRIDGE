@@ -1,4 +1,5 @@
-MULTI-SMR DSMR Bridge
+**MULTI-SMR DSMR Bridge**
+
 Ultra-Minimal Smart Meter Gateway — Engineered for Reliability
 
 MULTI-SMR is a featured open-source firmware project that delivers a high-reliability DSMR (P1) serial-to-TCP gateway using the simplest hardware configuration possible.
