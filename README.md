@@ -5,7 +5,7 @@ MULTI-SMR is a featured open-source firmware project delivering a high-reliabili
 
 The firmware is intentionally engineered around the ESP8266 — not as a legacy choice, but as a deliberate design decision driven by strict power budgets, electrical simplicity, and long-term operational stability.
 
-<img width="542" height="866" alt="MULTI-SMR hardware" src="https://github.com/user-attachments/assets/79b9c2e4-87bf-4b81-ae2a-c9e87051bb09" />
+<img width="624" height="887" alt="image" src="https://github.com/user-attachments/assets/3b5fc175-9475-4eea-99a0-12e6049d4753" />
 
 **Why This Project Exists**
 
