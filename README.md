@@ -111,8 +111,13 @@ User connects using phone, tablet, or laptop with WIFI to SMR-access-point !
 
 
 Browser is automatically redirected to the setup portal
+
+<img width="614" height="869" alt="image" src="https://github.com/user-attachments/assets/acc7f8e0-4690-4502-aae5-e2729b03c070" />
+
 Local Wi-Fi network is selected and credentials entered
-<img width="533" height="781" alt="image" src="https://github.com/user-attachments/assets/de7cf628-57e2-4820-8d3b-ec40ee1e4c3f" />
+
+<img width="475" height="904" alt="image" src="https://github.com/user-attachments/assets/cd7d6eee-9a3f-48cd-b702-8cec07fd2e3e" />
+
 
 
 Credentials are stored securely in non-volatile memory
