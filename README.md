@@ -1,11 +1,11 @@
 **MULTI-SMR**
 Ultra-Minimal Smart Meter Gateway — Engineered for Reliability
 
+<img width="624" height="887" alt="image" src="https://github.com/user-attachments/assets/3b5fc175-9475-4eea-99a0-12e6049d4753" />
+
 MULTI-SMR is a featured open-source firmware project delivering a high-reliability DSMR (P1) serial-to-TCP gateway using the simplest hardware configuration possible.
 
 The firmware is intentionally engineered around the ESP8266 — not as a legacy choice, but as a deliberate design decision driven by strict power budgets, electrical simplicity, and long-term operational stability.
-
-<img width="624" height="887" alt="image" src="https://github.com/user-attachments/assets/3b5fc175-9475-4eea-99a0-12e6049d4753" />
 
 **Why This Project Exists**
 
@@ -111,9 +111,6 @@ User connects using phone, tablet, or laptop with WIFI to SMR-access-point !
 
 
 Browser is automatically redirected to the setup portal
-
-<img width="614" height="869" alt="image" src="https://github.com/user-attachments/assets/acc7f8e0-4690-4502-aae5-e2729b03c070" />
-
 Local Wi-Fi network is selected and credentials entered
 
 <img width="475" height="904" alt="image" src="https://github.com/user-attachments/assets/cd7d6eee-9a3f-48cd-b702-8cec07fd2e3e" />
