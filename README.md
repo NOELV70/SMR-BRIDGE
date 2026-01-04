@@ -1,7 +1,8 @@
 **MULTI-SMR**
 Ultra-Minimal Smart Meter Gateway — Engineered for Reliability
 
-<img width="624" height="887" alt="image" src="https://github.com/user-attachments/assets/3b5fc175-9475-4eea-99a0-12e6049d4753" />
+<img width="469" height="421" alt="image" src="https://github.com/user-attachments/assets/3105fdeb-20cd-4dfe-8d65-a969f2736435" />
+
 
 MULTI-SMR is a featured open-source firmware project delivering a high-reliability DSMR (P1) serial-to-TCP gateway using the simplest hardware configuration possible.
 
@@ -109,6 +110,7 @@ ESP8266 starts in Access Point (AP) mode
 Temporary Wi-Fi network is broadcast (e.g. SMR-BRIDGE-XXXX)
 User connects using phone, tablet, or laptop with WIFI to SMR-access-point !
 
+<img width="624" height="887" alt="image" src="https://github.com/user-attachments/assets/3b5fc175-9475-4eea-99a0-12e6049d4753" />
 
 Browser is automatically redirected to the setup portal
 Local Wi-Fi network is selected and credentials entered
