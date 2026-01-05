@@ -1,11 +1,7 @@
 /*******************************************************************************
- * FILE:        smr_bridge_v5_7_0.ino
+ * FILE:        smr_bridge_v5_6_6.ino
  * AUTHOR:      Noel Vellemans
- * VERSION:     "5.7.0"
- *-------------------------------------------------------------------------------
- * MOTD:        If this code looks clever, it probably isn't.
- *              If it looks stupid, it definitely took hours.
- *-------------------------------------------------------------------------------
+ * VERSION:     5.x.x
  * LICENSE:     GNU General Public License v2.0 (GPLv2)
  *
  * This program is free software; you can redistribute it and/or modify
@@ -89,6 +85,12 @@
  * Serial Timeout       10 Minutes
  * Client Timeout       10 Minutes
  ******************************************************************************/
+/*******************************************************************************
+ * FILE:        smr_bridge_v6_0_7.ino
+ * VERSION:     6.0.7
+ * CODENAME:    GOOSE
+ * STATUS:      MASTER BUILD - NO STRIPPING - IP MANAGEMENT INCLUDED
+ ******************************************************************************/
 
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
@@ -102,7 +104,7 @@
 #define U0C0        ESP8266_REG(0x020) // CONF0
 #define UCRXI       19 // Invert RX
 
-#define KERNEL_VERSION    "5.7.0"
+#define KERNEL_VERSION    "6.0.7"
 #define KERNEL_CODENAME   "GOOSE"
 #define MAGIC_KEY         0x51    
 #define TCP_PORT          2001    
@@ -163,7 +165,7 @@ const char* dashStyle =
 ".btn-raw { background: #006400; color: #fff; }" 
 ".btn-red { background: #cc3300; color: #fff; }" 
 "input, select { width:100%; padding:14px; margin:10px 0; background:#000; color:#fff; border:1px solid #333; border-radius:6px; box-sizing: border-box; }"
-".footer { color: #444; font-size: 0.8em; margin-top: 30px; font-family: monospace; border-top: 1px solid #222; padding-top: 15px; line-height: 1.6; }"
+".footer { color: #444; font-size: 0.95em; margin-top: 30px; font-family: monospace; border-top: 1px solid #222; padding-top: 15px; line-height: 1.6; }"
 ".net-item { padding: 15px; border-bottom: 1px solid #333; text-align: left; cursor: pointer; }"
 ".net-item:hover { background: #222; }"
 "</style>";
@@ -176,6 +178,18 @@ const char* ipScript =
 
 String getFooter() {
     return "<div class='footer'>KERNEL: " + String(KERNEL_VERSION) + " [" + String(KERNEL_CODENAME) + "]<br>BUILD: " + String(__DATE__) + " " + String(__TIME__) + "<br>AUTHOR: NOEL VELLEMANS</div>";
+}
+
+String formatUptime() {
+    unsigned long totalSeconds = millis() / 1000;
+    unsigned long days = totalSeconds / 86400;
+    unsigned long hours = (totalSeconds % 86400) / 3600;
+    unsigned long minutes = (totalSeconds % 3600) / 60;
+    unsigned long seconds = totalSeconds % 60;
+    
+    String uptime = String(days) + "d " + String(hours) + "h " + String(minutes) + "m " + String(seconds) + "s";
+    
+    return uptime;
 }
 
 String ipFieldsHtml() {
@@ -205,11 +219,11 @@ void handleRoot() {
         h += "<form method='POST' action='/saveConfig'><input name='ssid' id='ssid' placeholder='WiFi SSID'><input name='pass' type='password' placeholder='WiFi Password'>";
         h += "<hr style='border:1px solid #333; margin:20px 0;'><strong>IP SETTINGS:</strong>" + ipFieldsHtml();
         h += "<button class='btn' style='margin-top:10px;'>SAVE & CONNECT</button></form>";
-        h += "<a href='/update' class='btn'>FLASH FIRMWARE (OTA)</a>";
+        h += "<a href='/update' class='btn' style='background:#004d40; color:#fff;'>FLASH FIRMWARE (OTA)</a>";
         h += "<form method='POST' action='/factReset' onsubmit=\"return confirm('ERASE ALL?')\"><button class='btn btn-red'>FACTORY RESET</button></form>";
     } else {
-        h += "<div class='stat'>LOCAL IP: " + WiFi.localIP().toString() + "<br>STREAMS: " + String(activeClients) + " ACTIVE</div>";
-        h += "<div class='stat diag'>UPTIME: " + String(millis()/1000) + "s<br>RAM: " + String(ESP.getFreeHeap()) + "b<br>SIGNAL: " + String(WiFi.RSSI()) + "dBm</div>";
+        h += "<div class='stat'>LOCAL IP: " + WiFi.localIP().toString() + "<br>STREAMS: " + String(activeClients) + " of " + String(MAX_TCP_CLIENTS) + " (MAX)</div>";
+        h += "<div class='stat diag'>UPTIME: " + formatUptime() + "<br>RAM: " + String(ESP.getFreeHeap()) + "b<br>SIGNAL: " + String(WiFi.RSSI()) + "dBm<br>LAST REBOOT: " + ESP.getResetReason() + "</div>";
         h += "<a class='btn btn-raw' href='/raw'>VIEW RAW P1 DATA</a>";
         h += "<a class='btn' href='/settings' style='margin-top:12px;'>SYSTEM SETTINGS</a>";
     }
@@ -298,7 +312,7 @@ void setup() {
         String h = "<html><head><title>WiFi Scan</title>"+String(dashStyle)+"</head><body><div class='container'><h1>WIFI SCAN</h1>";
         h += "<div class='stat diag' style='text-align:center;'>Scanning networks, please wait...</div>";
         h += "<script>setTimeout(function(){ location='/scanresults'; }, 2000);</script>";
-        String backLink = apMode ? "/" : "/settings";
+        String backLink = apMode ? "/" : "/config/wifi";
         h += "<a href='"+backLink+"' class='btn' style='background:#333;color:#fff;margin-top:20px;'>CANCEL</a></div></body></html>";
         webServer.send(200, "text/html", h);
     });
@@ -313,7 +327,7 @@ void setup() {
         } else if (n > 0) {
             h += "<div class='stat diag' style='text-align:center;'>Found " + String(n) + " network(s)</div>";
             for (int i = 0; i < n; i++) {
-                String clickAction = apMode ? "location='/?s="+customUrlEncode(WiFi.SSID(i))+"'" : "location='/settings?s="+customUrlEncode(WiFi.SSID(i))+"'";
+                String clickAction = apMode ? "location='/?s="+customUrlEncode(WiFi.SSID(i))+"'" : "location='/config/wifi?s="+customUrlEncode(WiFi.SSID(i))+"'";
                 h += "<div class='net-item' onclick=\""+clickAction+"\"><strong>"+WiFi.SSID(i)+"</strong><br><small>Signal: "+String(WiFi.RSSI(i))+"dBm</small></div>";
             }
             h += "<a href='/scan' class='btn' style='margin-top:20px;'>SCAN AGAIN</a>";
@@ -322,7 +336,7 @@ void setup() {
             h += "<a href='/scan' class='btn' style='margin-top:20px;'>SCAN AGAIN</a>";
         }
         
-        String backLink = apMode ? "/" : "/settings";
+        String backLink = apMode ? "/" : "/config/wifi";
         h += "<a href='"+backLink+"' class='btn' style='background:#333;color:#fff;margin-top:12px;'>BACK</a></div></body></html>";
         webServer.send(200, "text/html", h);
     });
@@ -332,7 +346,8 @@ void setup() {
         String h = "<html><head><title>RAW P1 Data</title><meta http-equiv='refresh' content='60'><meta name='viewport' content='width=device-width'>";
         h += String(dashStyle) + "</head><body><div class='container'><h1>RAW P1 DATA</h1>";
         h += "<div class='stat' style='font-family:monospace; white-space:pre-wrap; text-align:left; font-size:0.85em;'>" + lastFrameBuffer + "</div>";
-        h += "<a href='/' class='btn' style='background:#333;color:#fff;margin-top:20px;'>BACK TO DASHBOARD</a>";
+        h += "<a href='/raw' class='btn' style='background:#00aa00;color:#fff;margin-top:20px;'>REFRESH NOW</a>";
+        h += "<a href='/' class='btn' style='background:#333;color:#fff;margin-top:12px;'>BACK TO DASHBOARD</a>";
         h += getFooter() + "</div></body></html>";
         webServer.send(200, "text/html", h);
     });
@@ -340,16 +355,34 @@ void setup() {
     webServer.on("/settings", [](){
         if(!webServer.authenticate(config.wwwUser, config.wwwPass)) return webServer.requestAuthentication();
         String h = "<html><head><title>Settings</title>"+String(dashStyle)+ipScript+"</head><body><div class='container'><h1>SETTINGS</h1>";
-        h += "<form method='POST' action='/savePass'><input name='user' value='"+String(config.wwwUser)+"'><input name='pass' type='password' placeholder='New Pass'><button class='btn'>UPDATE ADMIN</button></form>";
-        h += "<hr style='border:1px solid #333; margin:20px 0;'><strong>NETWORK SETTINGS:</strong>";
+        h += "<a href='/config/wifi' class='btn'>WIFI & NETWORK</a>";
+        h += "<a href='/config/auth' class='btn'>ADMIN SECURITY</a>";
+        h += "<a href='/update' class='btn' style='background:#004d40; color:#fff;'>FLASH FIRMWARE (OTA)</a>";
+        h += "<form method='POST' action='/factReset' onsubmit=\"return confirm('Reset Everything?')\"><button class='btn btn-red'>FACTORY RESET</button></form>";
+        h += "<a href='/' class='btn' style='background:#333;color:#fff;'>BACK</a></div>"+getFooter()+"</body></html>";
+        webServer.send(200, "text/html", h);
+    });
+    
+    webServer.on("/config/wifi", [](){
+        if(!webServer.authenticate(config.wwwUser, config.wwwPass)) return webServer.requestAuthentication();
+        String h = "<html><head><title>WiFi & Network</title>"+String(dashStyle)+ipScript+"</head><body><div class='container'><h1>WIFI & NETWORK</h1>";
         h += "<a href='/scan' class='btn' style='margin-bottom:12px;'>SCAN WIFI NETWORKS</a>";
         h += "<form method='POST' action='/saveConfig'><input name='ssid' id='ssid' placeholder='WiFi SSID' value='"+String(config.wifiSsid)+"'><input name='pass' type='password' placeholder='WiFi Password'>";
-        h += ipFieldsHtml() + "<button class='btn'>UPDATE IP/WIFI</button></form>";
-        h += "<a href='/update' class='btn'>OTA UPDATE</a>";
-        h += "<form method='POST' action='/factReset' onsubmit=\"return confirm('Reset Everything?')\"><button class='btn btn-red'>FACTORY RESET</button></form>";
-        h += "<a href='/' class='btn' style='background:#333;color:#fff;'>BACK</a></div>"+getFooter();
+        h += "<hr style='border:1px solid #333; margin:20px 0;'><strong>IP SETTINGS:</strong>" + ipFieldsHtml();
+        h += "<button class='btn'>SAVE SETTINGS</button></form>";
+        h += "<a href='/settings' class='btn' style='background:#333;color:#fff;'>BACK</a></div>"+getFooter();
         h += "<script>var p=new URLSearchParams(window.location.search);if(p.has('s'))document.getElementById('ssid').value=decodeURIComponent(p.get('s'));</script>";
         h += "</body></html>";
+        webServer.send(200, "text/html", h);
+    });
+    
+    webServer.on("/config/auth", [](){
+        if(!webServer.authenticate(config.wwwUser, config.wwwPass)) return webServer.requestAuthentication();
+        String h = "<html><head><title>Admin Security</title>"+String(dashStyle)+"</head><body><div class='container'><h1>ADMIN SECURITY</h1>";
+        h += "<form method='POST' action='/savePass'><input name='user' placeholder='Username' value='"+String(config.wwwUser)+"'>";
+        h += "<input name='pass' type='password' placeholder='New Password'>";
+        h += "<button class='btn'>UPDATE CREDENTIALS</button></form>";
+        h += "<a href='/settings' class='btn' style='background:#333;color:#fff;'>BACK</a></div>"+getFooter()+"</body></html>";
         webServer.send(200, "text/html", h);
     });
 
