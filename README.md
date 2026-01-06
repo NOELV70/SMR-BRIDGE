@@ -1,10 +1,10 @@
-**MULTI-SMR**
+**SMR-Bridge**
 Ultra-Minimal Smart Meter Gateway — Engineered for Reliability
 
 <img width="469" height="421" alt="image" src="https://github.com/user-attachments/assets/3105fdeb-20cd-4dfe-8d65-a969f2736435" />
 
 
-MULTI-SMR is a featured open-source firmware project delivering a high-reliability DSMR (P1) serial-to-TCP gateway using the simplest hardware configuration possible.
+SMR-Bridge is a featured open-source firmware project delivering a high-reliability DSMR (P1) serial-to-TCP gateway using the simplest hardware configuration possible.
 
 The firmware is intentionally engineered around the ESP8266 — not as a legacy choice, but as a deliberate design decision driven by strict power budgets, electrical simplicity, and long-term operational stability.
 
@@ -17,7 +17,7 @@ Many smart-meter gateways are over-engineered:
   Power-hungry microcontrollers
   Complex hardware stacks with increased failure risk
 
-MULTI-SMR takes the opposite approach.
+SMR-Bridge takes the opposite approach.
 
 It demonstrates that a single ESP8266, correctly configured at the register level, is sufficient to deliver:
 
@@ -49,7 +49,7 @@ This eliminates:
 
 Dutch DSMR specifications allow the P1 port to supply up to ~100 mA.
 
-MULTI-SMR is engineered to remain within this limit, allowing the ESP8266 module to be powered directly from the smart meter output — with no external power source required.
+SMR-Bridge is engineered to remain within this limit, allowing the ESP8266 module to be powered directly from the smart meter output — with no external power source required.
 
 This constraint is a key reason the ESP8266 was chosen over the ESP32.
 
@@ -101,7 +101,7 @@ Arduino IDE OTA
 Browser-based firmware upload
 Safe reboot after update completion
 Zero-Touch Wi-Fi Provisioning (Captive Portal)
-MULTI-SMR can be deployed by end users without preconfigured credentials, serial consoles, or firmware modification.
+SMR-Bridge can be deployed by end users without preconfigured credentials, serial consoles, or firmware modification.
 
 On first boot — or when no valid Wi-Fi credentials are present — the device automatically launches a self-hosted captive portal.
 
@@ -145,7 +145,7 @@ This prevents unauthorized access after commissioning while keeping initial setu
 
 **Seamless Integration with Home Automation Platforms**
 
-MULTI-SMR integrates effortlessly with modern home-automation and energy-monitoring platforms.
+SMR-Bridge integrates effortlessly with modern home-automation and energy-monitoring platforms.
 
 By exposing the DSMR data as a transparent TCP stream, the firmware remains platform-agnostic, avoiding proprietary formats or vendor lock-in.
 
