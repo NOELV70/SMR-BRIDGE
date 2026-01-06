@@ -85,12 +85,7 @@
  * Serial Timeout       10 Minutes
  * Client Timeout       10 Minutes
  ******************************************************************************/
-/*******************************************************************************
- * FILE:        smr_bridge_v6_0_7.ino
- * VERSION:     6.0.7
- * CODENAME:    GOOSE
- * STATUS:      MASTER BUILD - NO STRIPPING - IP MANAGEMENT INCLUDED
- ******************************************************************************/
+
 
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
@@ -214,7 +209,7 @@ void handleRoot() {
     h += "<h1>" + pageTitle + "</h1>";
 
     if(apMode) {
-        h += "<div class='stat diag'>ACP MODE: 192.168.4.1<br>RAM: " + String(ESP.getFreeHeap()) + "b</div>";
+        h += "<div class='stat diag'>ACP MODE: 192.168.4.1<br>HEAP: " + String(ESP.getFreeHeap()) + " Bytes <br>LAST REBOOT: " + ESP.getResetReason() + "</div>";
         h += "<a href='/scan' class='btn' style='margin-bottom:12px;'>SCAN WIFI NETWORKS</a>";
         h += "<form method='POST' action='/saveConfig'><input name='ssid' id='ssid' placeholder='WiFi SSID'><input name='pass' type='password' placeholder='WiFi Password'>";
         h += "<hr style='border:1px solid #333; margin:20px 0;'><strong>IP SETTINGS:</strong>" + ipFieldsHtml();
@@ -223,7 +218,7 @@ void handleRoot() {
         h += "<form method='POST' action='/factReset' onsubmit=\"return confirm('ERASE ALL?')\"><button class='btn btn-red'>FACTORY RESET</button></form>";
     } else {
         h += "<div class='stat'>LOCAL IP: " + WiFi.localIP().toString() + "<br>STREAMS: " + String(activeClients) + " of " + String(MAX_TCP_CLIENTS) + " (MAX)</div>";
-        h += "<div class='stat diag'>UPTIME: " + formatUptime() + "<br>RAM: " + String(ESP.getFreeHeap()) + "b<br>SIGNAL: " + String(WiFi.RSSI()) + "dBm<br>LAST REBOOT: " + ESP.getResetReason() + "</div>";
+        h += "<div class='stat diag'>UPTIME: " + formatUptime() + "<br>HEAP: " + String(ESP.getFreeHeap()) + " Bytes<br>SIGNAL: " + String(WiFi.RSSI()) + " dBm<br>LAST REBOOT: " + ESP.getResetReason() + "</div>";
         h += "<a class='btn btn-raw' href='/raw'>VIEW RAW P1 DATA</a>";
         h += "<a class='btn' href='/settings' style='margin-top:12px;'>SYSTEM SETTINGS</a>";
     }
@@ -261,7 +256,7 @@ void setup() {
         memset(&config, 0, sizeof(AppConfig));
         config.dhcpMode = true;
         strcpy(config.wwwUser, "admin"); strcpy(config.wwwPass, "admin");
-        strcpy(config.staticIP, "192.168.1.100"); strcpy(config.gateway, "192.168.1.1"); strcpy(config.subnet, "255.255.255.0");
+        strcpy(config.staticIP, "192.168.4.1"); strcpy(config.gateway, "192.168.4.1"); strcpy(config.subnet, "255.255.255.0");
         EEPROM.write(0, MAGIC_KEY); EEPROM.put(1, config); EEPROM.commit(); 
     } else { EEPROM.get(1, config); }
 
