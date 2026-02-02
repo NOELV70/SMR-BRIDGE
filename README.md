@@ -180,6 +180,8 @@ it’s about what’s easy, reliable, user-friendly, and cost-effective.**
 Oh yes... before i forget ... 
 
 For those wondering how it looks… one resistor, four wires… because some miracles are best kept simple. 
+
+
 <img width="478" height="473" alt="image" src="https://github.com/user-attachments/assets/c6c185fa-6e11-44e6-a90b-bdfced986ec7" />
 
 
