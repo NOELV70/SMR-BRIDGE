@@ -189,4 +189,5 @@ For those wondering how it looks… one resistor, four wires… because some mir
 Open-source firmware — built to run where others over-engineer.
 
 
-**Your coffee = more uptime for my brain’s firmware. Keep me running!** [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/C0C21TRVZ5)
+**Your coffee = more uptime for my brain’s firmware. Keep me running!** 
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/C0C21TRVZ5)
