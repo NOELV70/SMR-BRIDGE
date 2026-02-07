@@ -187,3 +187,6 @@ For those wondering how it looks… one resistor, four wires… because some mir
 
 © Noel Vellemans
 Open-source firmware — built to run where others over-engineer.
+
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/C0C21TRVZ5)
