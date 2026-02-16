@@ -1,4 +1,4 @@
-/*******************************************************************************
+ /*******************************************************************************
  * FILE:        smr_bridge_
  * AUTHOR:      Noel Vellemans
  * VERSION:     
@@ -85,6 +85,8 @@
  * Serial Timeout       10 Minutes
  * Client Timeout       10 Minutes
  ******************************************************************************/
+
+
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
 #include <ESP8266WebServer.h>
@@ -93,7 +95,7 @@
 #include <EEPROM.h> 
 
 //=============================================================================
-// DSMR PARSER V2 - INTEGRATED
+// DSMR PARSER V2 - INTEGRATED WITH POWER FACTOR
 //=============================================================================
 
 // OBIS CODE DEFINITIONS - Stored in PROGMEM
@@ -118,6 +120,11 @@ const char OBIS_VOLTAGE_L3[] PROGMEM     = "1-0:72.7.0";
 const char OBIS_CURRENT_L1[] PROGMEM     = "1-0:31.7.0";
 const char OBIS_CURRENT_L2[] PROGMEM     = "1-0:51.7.0";
 const char OBIS_CURRENT_L3[] PROGMEM     = "1-0:71.7.0";
+// NEW: Power Factor OBIS codes (not all meters provide these)
+const char OBIS_PF_TOTAL[] PROGMEM       = "1-0:13.7.0";
+const char OBIS_PF_L1[] PROGMEM          = "1-0:33.7.0";
+const char OBIS_PF_L2[] PROGMEM          = "1-0:53.7.0";
+const char OBIS_PF_L3[] PROGMEM          = "1-0:73.7.0";
 
 // OBIS ID DEFINITIONS
 enum obis_id_t : uint8_t {
@@ -129,16 +136,17 @@ enum obis_id_t : uint8_t {
     OBIS_ID_POWER_L1, OBIS_ID_POWER_L2, OBIS_ID_POWER_L3,
     OBIS_ID_RETURN_L1, OBIS_ID_RETURN_L2, OBIS_ID_RETURN_L3,
     OBIS_ID_VOLTAGE_L1, OBIS_ID_VOLTAGE_L2, OBIS_ID_VOLTAGE_L3,
-    OBIS_ID_CURRENT_L1, OBIS_ID_CURRENT_L2, OBIS_ID_CURRENT_L3
+    OBIS_ID_CURRENT_L1, OBIS_ID_CURRENT_L2, OBIS_ID_CURRENT_L3,
+    OBIS_ID_PF_TOTAL, OBIS_ID_PF_L1, OBIS_ID_PF_L2, OBIS_ID_PF_L3
 };
 
 // DSMR DATA STRUCTURE - Fixed-point for minimal RAM
 typedef struct {
     // Energy counters (mWh = kWh * 1000000)
-    int32_t energy_delivered_low;
-    int32_t energy_delivered_high;
-    int32_t energy_produced_low;
-    int32_t energy_produced_high;
+    uint64_t energy_delivered_low;
+    uint64_t energy_delivered_high;
+    uint64_t energy_produced_low;
+    uint64_t energy_produced_high;
     
     // Instantaneous power (mW = kW * 1000000)
     int32_t current_power;
@@ -154,15 +162,20 @@ typedef struct {
     // Per phase current (10mA = A * 1000)
     int16_t current_l1, current_l2, current_l3;
     
+    // NEW: Power factor (stored as percentage * 100, e.g., 95.5% = 9550)
+    // Negative values indicate leading (capacitive), positive = lagging (inductive)
+    int16_t pf_total, pf_l1, pf_l2, pf_l3;
+    
     // Meter info
     int32_t power_limit;
-    char meter_id[17];
+    char meter_id[33];
     char timestamp[14];
-    char equipment_id[17];
+    char equipment_id[33];
     
     // Status
     uint8_t is_3phase : 1;
     uint8_t frame_complete : 1;
+    uint8_t has_pf_data : 1;  // NEW: Flag if meter provides PF data
 } dsmr_data_t;
 
 // LINE BUFFER PARSER
@@ -201,6 +214,10 @@ const obis_entry_t OBIS_TABLE[] PROGMEM = {
     {OBIS_CURRENT_L1,         OBIS_ID_CURRENT_L1},
     {OBIS_CURRENT_L2,         OBIS_ID_CURRENT_L2},
     {OBIS_CURRENT_L3,         OBIS_ID_CURRENT_L3},
+    {OBIS_PF_TOTAL,           OBIS_ID_PF_TOTAL},
+    {OBIS_PF_L1,              OBIS_ID_PF_L1},
+    {OBIS_PF_L2,              OBIS_ID_PF_L2},
+    {OBIS_PF_L3,              OBIS_ID_PF_L3},
     {NULL, 0}
 };
 
@@ -215,10 +232,10 @@ static bool strcmp_P_safe(const char *str, const char *pstr) {
     return false;
 }
 
-// Match OBIS code
+// Match OBIS code (using pgm_read_dword - correct for ESP8266)
 static uint8_t match_obis_code(const char *obis) {
-    for (uint8_t i = 0; pgm_read_word(&OBIS_TABLE[i].obis_string) != 0; i++) {
-        const char *obis_str = (const char*)pgm_read_word(&OBIS_TABLE[i].obis_string);
+    for (uint8_t i = 0; pgm_read_dword(&OBIS_TABLE[i].obis_string) != 0; i++) {
+        const char *obis_str = (const char*)pgm_read_dword(&OBIS_TABLE[i].obis_string);
         if (strcmp_P_safe(obis, obis_str)) {
             return pgm_read_byte(&OBIS_TABLE[i].obis_id);
         }
@@ -227,11 +244,18 @@ static uint8_t match_obis_code(const char *obis) {
 }
 
 // Fast ASCII to fixed-point conversion
-static int32_t ascii_to_fixed(const char *str, uint8_t scale) {
-    int32_t result = 0;
-    int32_t fraction = 0;
+static int64_t ascii_to_fixed(const char *str, uint8_t scale) {
+    int64_t result = 0;
+    int64_t fraction = 0;
     uint8_t decimal_seen = 0;
     uint8_t frac_digits = 0;
+    int8_t sign = 1;
+    
+    // Handle negative sign
+    if (*str == '-') {
+        sign = -1;
+        str++;
+    }
     
     while (*str) {
         if (*str == '.') {
@@ -247,7 +271,7 @@ static int32_t ascii_to_fixed(const char *str, uint8_t scale) {
         str++;
     }
     
-    while (frac_digits < scale) {
+    while (frac_digits < 6) {
         fraction *= 10;
         frac_digits++;
     }
@@ -257,7 +281,7 @@ static int32_t ascii_to_fixed(const char *str, uint8_t scale) {
     if (scale == 2) result /= 10000;
     else if (scale == 3) result /= 1000;
     
-    return result;
+    return result * sign;
 }
 
 // Extract value from line
@@ -289,11 +313,15 @@ static void store_value(dsmr_data_t *data, uint8_t obis_type, const char *value_
         return;
     }
     
-    int32_t value;
+    int64_t value;
     if (obis_type >= OBIS_ID_VOLTAGE_L1 && obis_type <= OBIS_ID_VOLTAGE_L3) {
         value = ascii_to_fixed(value_str, 2);
     } else if (obis_type >= OBIS_ID_CURRENT_L1 && obis_type <= OBIS_ID_CURRENT_L3) {
         value = ascii_to_fixed(value_str, 3);
+    } else if (obis_type >= OBIS_ID_PF_TOTAL && obis_type <= OBIS_ID_PF_L3) {
+        // Power factor: convert to percentage * 100 (e.g., 0.955 -> 9550)
+        value = ascii_to_fixed(value_str, 6) / 10;  // Convert to hundredths of percent
+        data->has_pf_data = 1;
     } else {
         value = ascii_to_fixed(value_str, 6);
     }
@@ -306,18 +334,22 @@ static void store_value(dsmr_data_t *data, uint8_t obis_type, const char *value_
         case OBIS_ID_ENERGY_PROD_HIGH:data->energy_produced_high = value; break;
         case OBIS_ID_CURRENT_POWER:   data->current_power = value; break;
         case OBIS_ID_CURRENT_RETURN:  data->current_return = value; break;
-        case OBIS_ID_POWER_L1:        data->power_l1 = value; data->is_3phase = 1; break;
+        case OBIS_ID_POWER_L1:        data->power_l1 = value; break;
         case OBIS_ID_POWER_L2:        data->power_l2 = value; data->is_3phase = 1; break;
         case OBIS_ID_POWER_L3:        data->power_l3 = value; data->is_3phase = 1; break;
         case OBIS_ID_RETURN_L1:       data->return_l1 = value; break;
         case OBIS_ID_RETURN_L2:       data->return_l2 = value; break;
         case OBIS_ID_RETURN_L3:       data->return_l3 = value; break;
-        case OBIS_ID_VOLTAGE_L1:      data->voltage_l1 = value; data->is_3phase = 1; break;
+        case OBIS_ID_VOLTAGE_L1:      data->voltage_l1 = value; break;
         case OBIS_ID_VOLTAGE_L2:      data->voltage_l2 = value; data->is_3phase = 1; break;
         case OBIS_ID_VOLTAGE_L3:      data->voltage_l3 = value; data->is_3phase = 1; break;
-        case OBIS_ID_CURRENT_L1:      data->current_l1 = value; data->is_3phase = 1; break;
+        case OBIS_ID_CURRENT_L1:      data->current_l1 = value; break;
         case OBIS_ID_CURRENT_L2:      data->current_l2 = value; data->is_3phase = 1; break;
         case OBIS_ID_CURRENT_L3:      data->current_l3 = value; data->is_3phase = 1; break;
+        case OBIS_ID_PF_TOTAL:        data->pf_total = value; break;
+        case OBIS_ID_PF_L1:           data->pf_l1 = value; break;
+        case OBIS_ID_PF_L2:           data->pf_l2 = value; break;
+        case OBIS_ID_PF_L3:           data->pf_l3 = value; break;
     }
 }
 
@@ -390,10 +422,27 @@ uint8_t dsmr_parse_byte(dsmr_parser_t *parser, uint8_t c) {
 }
 
 // Helper functions to convert fixed-point to float
-static inline float fixed_to_kwh(int32_t val) { return val / 1000000.0f; }
+static inline float fixed_to_kwh(int64_t val) { return val / 1000000.0f; }
 static inline float fixed_to_kw(int32_t val) { return val / 1000000.0f; }
 static inline float fixed_to_v(int16_t val) { return val / 100.0f; }
 static inline float fixed_to_a(int16_t val) { return val / 1000.0f; }
+static inline float fixed_to_pf(int16_t val) { return val / 10000.0f; }  // NEW: Convert to decimal (0.0-1.0)
+
+// NEW: Calculate power factor if not provided by meter
+static float calculate_pf(float voltage, float current, float real_power) {
+    if (voltage < 1.0 || current < 0.001) return 0.0;  // Avoid division by zero
+    
+    float apparent_power = (voltage * current) / 1000.0;  // kVA
+    if (apparent_power < 0.001) return 0.0;
+    
+    float pf = real_power / apparent_power;
+    
+    // Clamp to valid range [-1.0, 1.0]
+    if (pf > 1.0) pf = 1.0;
+    if (pf < -1.0) pf = -1.0;
+    
+    return pf;
+}
 
 // Helper functions for easy access to parsed data
 float dsmr_get_total_consumed(const dsmr_data_t *data) {
@@ -405,8 +454,8 @@ float dsmr_get_total_produced(const dsmr_data_t *data) {
 }
 
 float dsmr_get_net_energy(const dsmr_data_t *data) {
-    int32_t net = (data->energy_delivered_low + data->energy_delivered_high) - 
-                  (data->energy_produced_low + data->energy_produced_high);
+    int64_t net = ((int64_t)data->energy_delivered_low + (int64_t)data->energy_delivered_high) - 
+                  ((int64_t)data->energy_produced_low + (int64_t)data->energy_produced_high);
     return fixed_to_kwh(net);
 }
 
@@ -419,6 +468,34 @@ bool dsmr_is_consuming(const dsmr_data_t *data) {
     return data->current_power > data->current_return;
 }
 
+// Direction detection helper functions (per-phase net power and direction)
+float dsmr_get_net_power_l1(const dsmr_data_t *data) {
+    return fixed_to_kw(data->power_l1 - data->return_l1);
+}
+
+float dsmr_get_net_power_l2(const dsmr_data_t *data) {
+    return fixed_to_kw(data->power_l2 - data->return_l2);
+}
+
+float dsmr_get_net_power_l3(const dsmr_data_t *data) {
+    return fixed_to_kw(data->power_l3 - data->return_l3);
+}
+
+String dsmr_get_direction_l1(const dsmr_data_t *data) {
+    if (data->power_l1 == 0 && data->return_l1 == 0) return "IDLE";
+    return (data->power_l1 > data->return_l1) ? "→ CONSUMING" : "← PRODUCING";
+}
+
+String dsmr_get_direction_l2(const dsmr_data_t *data) {
+    if (data->power_l2 == 0 && data->return_l2 == 0) return "IDLE";
+    return (data->power_l2 > data->return_l2) ? "→ CONSUMING" : "← PRODUCING";
+}
+
+String dsmr_get_direction_l3(const dsmr_data_t *data) {
+    if (data->power_l3 == 0 && data->return_l3 == 0) return "IDLE";
+    return (data->power_l3 > data->return_l3) ? "→ CONSUMING" : "← PRODUCING";
+}
+
 //=============================================================================
 // END DSMR PARSER
 //=============================================================================
@@ -427,8 +504,8 @@ bool dsmr_is_consuming(const dsmr_data_t *data) {
 #define ESP8266_REG(addr) *((volatile uint32_t *)(0x60000000+(addr)))
 #define U0C0        ESP8266_REG(0x020) // CONF0
 #define UCRXI       19 // Invert RX
-#define KERNEL_VERSION    "6.1.0"
-#define KERNEL_CODENAME   "GOOSE-PARSER"
+#define KERNEL_VERSION    "6.2.0"
+#define KERNEL_CODENAME   "GOOSE-PF"
 #define MAGIC_KEY         0x51    
 #define TCP_PORT          2001    
 #define MAX_TCP_CLIENTS   10      
@@ -458,6 +535,7 @@ int activeClients = 0;
 
 // DSMR Parser instances
 dsmr_data_t dsmr_data;
+dsmr_data_t dsmr_last_good;
 dsmr_parser_t dsmr_parser;
 
 // Watchdog and monitoring variables
@@ -487,6 +565,9 @@ const char* dashStyle =
 "h1 { color: #ffcc00; border-bottom: 2px solid #ffcc00; padding-bottom: 12px; margin-top: 0; text-transform: uppercase; letter-spacing: 2px; }"
 ".stat { background: #222; padding: 15px; margin: 12px 0; border-radius: 8px; border-left: 6px solid #ffcc00; text-align: left; color: #ffcc00; font-family: 'Courier New', monospace; font-size: 0.9em; }"
 ".diag { border-left-color: #00ffcc; color: #00ffcc; }" 
+".pf-good { border-left-color: #00ff00; color: #00ff00; }"
+".pf-fair { border-left-color: #ffaa00; color: #ffaa00; }"
+".pf-poor { border-left-color: #ff3300; color: #ff3300; }"
 ".btn { color: #121212; background: #ffcc00; padding: 14px; border-radius: 8px; font-weight: bold; text-decoration: none; display: block; margin-top: 12px; border: none; cursor: pointer; text-align: center; font-size: 1em; width:100%; box-sizing:border-box; }"
 ".btn-raw { background: #006400; color: #fff; }" 
 ".btn-red { background: #cc3300; color: #fff; }" 
@@ -529,14 +610,206 @@ String ipFieldsHtml() {
     return s;
 }
 
+// NEW: Helper function to get power factor CSS class
+String getPFClass(float pf) {
+    float abs_pf = abs(pf);
+    if (abs_pf >= 0.95) return "pf-good";
+    if (abs_pf >= 0.85) return "pf-fair";
+    return "pf-poor";
+}
+
+// NEW: Helper function to format power factor with quality indicator
+String formatPF(float pf) {
+    String quality;
+    float abs_pf = abs(pf);
+    if (abs_pf >= 0.95) quality = "EXCELLENT";
+    else if (abs_pf >= 0.90) quality = "GOOD";
+    else if (abs_pf >= 0.85) quality = "FAIR";
+    else if (abs_pf >= 0.70) quality = "POOR";
+    else quality = "CRITICAL";
+    
+    String type = (pf >= 0) ? "LAG" : "LEAD";
+    
+    return String(abs_pf, 3) + " (" + quality + ", " + type + ")";
+}
+
+// NEW: Helper function to get power factor hex color
+String getPFColor(float pf) {
+    float abs_pf = abs(pf);
+    if (abs_pf >= 0.95) return "#00ff00";
+    if (abs_pf >= 0.85) return "#ffaa00";
+    return "#ff3300";
+}
+
+//=============================================================================
+// UPDATED LIVE PAGE HANDLER WITH POWER FACTOR
+//=============================================================================
+void handleLive() {
+    if(!webServer.authenticate(config.wwwUser, config.wwwPass)) return webServer.requestAuthentication();
+    String h = "<html><head><title>Live P1</title>";
+    h += "<meta charset='UTF-8'><meta name='viewport' content='width=device-width'>" + String(dashStyle) + "</head><body><div class='container'><h1>LIVE DATA</h1>";
+    
+    h += "<div class='stat diag'>TIMESTAMP: " + String(dsmr_last_good.timestamp) + "<br>METER ID: " + String(dsmr_last_good.meter_id) + "</div>";
+    
+    float net = dsmr_get_current_power(&dsmr_last_good);
+    String color = (net >= 0) ? "#ffcc00" : "#00ffcc";
+    h += "<div class='stat' style='border-left-color:"+color+"; color:"+color+";'>";
+    h += "CURRENT " + String(net >= 0 ? "CONSUMPTION: " : "INJECTION: ") + String(abs(net), 3) + " kW</div>";
+    
+    h += "<div class='stat'>TOTAL CONSUMED: " + String(dsmr_get_total_consumed(&dsmr_last_good), 3) + " kWh<br>";
+    h += "TOTAL PRODUCED: " + String(dsmr_get_total_produced(&dsmr_last_good), 3) + " kWh</div>";
+    
+    // Calculate phase values
+    float p1 = dsmr_get_net_power_l1(&dsmr_last_good);
+    float p2 = dsmr_get_net_power_l2(&dsmr_last_good);
+    float p3 = dsmr_get_net_power_l3(&dsmr_last_good);
+    
+    float v1 = fixed_to_v(dsmr_last_good.voltage_l1);
+    float v2 = fixed_to_v(dsmr_last_good.voltage_l2);
+    float v3 = fixed_to_v(dsmr_last_good.voltage_l3);
+    
+    float c1 = fixed_to_a(dsmr_last_good.current_l1);
+    float c2 = fixed_to_a(dsmr_last_good.current_l2);
+    float c3 = fixed_to_a(dsmr_last_good.current_l3);
+    
+    // NEW: Calculate apparent power (VA) for each phase
+    float va1 = (v1 * c1) / 1000.0;  // Convert to kVA
+    float va2 = (v2 * c2) / 1000.0;
+    float va3 = (v3 * c3) / 1000.0;
+    float total_va = va1 + va2 + va3;
+    
+    // Calculate or retrieve power factor
+    float pf1, pf2, pf3;
+    if (dsmr_last_good.has_pf_data) {
+        pf1 = fixed_to_pf(dsmr_last_good.pf_l1);
+        pf2 = fixed_to_pf(dsmr_last_good.pf_l2);
+        pf3 = fixed_to_pf(dsmr_last_good.pf_l3);
+    } else {
+        if (!dsmr_last_good.is_3phase) {
+            pf1 = calculate_pf(v1, c1, abs(net));
+            pf2 = 0; pf3 = 0;
+        } else {
+            pf1 = calculate_pf(v1, c1, abs(p1));
+            pf2 = calculate_pf(v2, c2, abs(p2));
+            pf3 = calculate_pf(v3, c3, abs(p3));
+        }
+    }
+    
+    // NEW: Summary box showing VA vs W
+    h += "<div class='stat' style='border-left-color:#ff6600; color:#ff6600;'>";
+    h += "<strong>POWER ANALYSIS:</strong><br>";
+    h += "Total Real Power (W): " + String(abs(net), 3) + " kW<br>";
+    h += "Total Apparent Power (VA): " + String(total_va, 3) + " kVA<br>";
+    
+    float overall_pf = (total_va > 0.001) ? (abs(net) / total_va) : 0.0;
+    h += "Overall Power Factor: " + String(overall_pf, 3) + "<br>";
+    
+    if (overall_pf < 0.90) {
+        float wasted_va = total_va - abs(net);
+        h += "<span style='color:#ff3300;'>⚠ Wasted Capacity: " + String(wasted_va, 3) + " kVA (reactive)</span>";
+    }
+    h += "</div>";
+    
+    h += "<div class='stat diag'><strong>PHASE METRICS:</strong><br>";
+
+    if (dsmr_last_good.is_3phase) {
+        // Phase display with signed values (+ consuming, - producing)
+        // L1 Display - signed current and power
+        h += "<strong>L1:</strong> " + String(v1, 1) + "V | ";
+        h += (p1 >= 0 ? "+" : "-") + String(c1, 3) + "A | ";  // Sign based on power direction
+        h += String(va1, 3) + "kVA → ";
+        h += (p1 >= 0 ? "+" : "") + String(p1, 3) + "kW";
+        if (va1 > 0.001) h += " (PF=" + String(pf1, 3) + ")";
+        h += "<br>";
+        
+        // L2 Display - signed current and power
+        h += "<strong>L2:</strong> " + String(v2, 1) + "V | ";
+        h += (p2 >= 0 ? "+" : "-") + String(c2, 3) + "A | ";
+        h += String(va2, 3) + "kVA → ";
+        h += (p2 >= 0 ? "+" : "") + String(p2, 3) + "kW";
+        if (va2 > 0.001) h += " (PF=" + String(pf2, 3) + ")";
+        h += "<br>";
+        
+        // L3 Display - signed current and power
+        h += "<strong>L3:</strong> " + String(v3, 1) + "V | ";
+        h += (p3 >= 0 ? "+" : "-") + String(c3, 3) + "A | ";
+        h += String(va3, 3) + "kVA → ";
+        h += (p3 >= 0 ? "+" : "") + String(p3, 3) + "kW";
+        if (va3 > 0.001) h += " (PF=" + String(pf3, 3) + ")";
+        h += "<br><br>";
+        
+        // Verification
+        float sum_power = p1 + p2 + p3;
+        h += "<strong>VERIFICATION:</strong><br>";
+        h += "Sum of phases: " + String(sum_power, 3) + " kW<br>";
+        h += "Meter total: " + String(abs(net), 3) + " kW ";
+        
+        float diff = abs(sum_power - abs(net));
+        if (diff < 0.010) {
+            h += "<span style='color:#00ff00;'>✓ Match!</span>";
+        } else {
+            h += "<span style='color:#ffaa00;'>⚠ Δ=" + String(diff, 3) + "kW</span>";
+        }
+        h += "</div>";
+        
+        // Individual phase power factors with color coding
+        String pfContainerClass = "pf-good";
+        float min_pf = abs(pf1);
+        if (abs(pf2) < min_pf) min_pf = abs(pf2);
+        if (abs(pf3) < min_pf) min_pf = abs(pf3);
+        
+        if (min_pf < 0.85) pfContainerClass = "pf-poor";
+        else if (min_pf < 0.95) pfContainerClass = "pf-fair";
+        
+        h += "<div class='stat " + pfContainerClass + "'><strong>PHASE POWER FACTOR:</strong><br>";
+        h += "<span style='color:" + getPFColor(pf1) + "'>L1: " + formatPF(pf1) + "</span><br>";
+        h += "<span style='color:" + getPFColor(pf2) + "'>L2: " + formatPF(pf2) + "</span><br>";
+        h += "<span style='color:" + getPFColor(pf3) + "'>L3: " + formatPF(pf3) + "</span></div>";
+        
+    } else {
+        h += "MAIN: " + String(v1, 1) + "V | " + String(c1, 3) + "A | ";
+        h += String(va1, 3) + "kVA → " + String(net, 3) + "kW";
+        if (va1 > 0.001) h += " (PF=" + String(pf1, 3) + ")";
+        h += "</div>";
+        
+        h += "<div class='stat " + getPFClass(pf1) + "'><strong>POWER FACTOR:</strong> " + formatPF(pf1) + "</div>";
+    }
+    
+    // Educational guide
+    h += "<div class='stat' style='font-size:0.75em; color:#999; border-left-color:#444;'>";
+    h += "<strong>UNDERSTANDING POWER & CURRENT:</strong><br>";
+    h += "• <strong>+ (Positive):</strong> Consuming from grid (↓ incoming)<br>";
+    h += "• <strong>- (Negative):</strong> Injecting to grid (↑ outgoing)<br>";
+    h += "• <strong>Current sign:</strong> Follows power direction (+ in, - out)<br>";
+    h += "• <strong>Real Power (W/kW):</strong> Energy you actually use (billed)<br>";
+    h += "• <strong>Apparent Power (VA/kVA):</strong> V × I = Grid capacity used<br>";
+    h += "• <strong>Power Factor (PF):</strong> Real Power ÷ Apparent Power<br>";
+    h += "• <strong>Good PF (>0.95):</strong> Efficient, W ≈ VA<br>";
+    h += "• <strong>Poor PF (<0.70):</strong> Wastes grid capacity, higher losses<br>";
+    h += "• <strong>Sum Rule:</strong> Real power (kW) adds linearly across phases<br>";
+    h += "• <strong>Reactive loads:</strong> Draw current but consume little real power<br>";
+    h += (dsmr_last_good.has_pf_data ? "PF DATA: From Meter" : "PF DATA: Calculated from V×I÷P");
+    h += "</div>";
+    
+    h += "<a href='/live-data' class='btn' style='background:#00aa00;color:#fff;margin-top:20px;'>REFRESH NOW</a>";
+    h += "<a href='/' class='btn' style='background:#333;color:#fff;'>BACK TO DASHBOARD</a>" + getFooter() + "</div></body></html>";
+    webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    webServer.sendHeader("Pragma", "no-cache");
+    webServer.sendHeader("Expires", "0");
+    webServer.send(200, "text/html", h);
+}
+
 void handleRoot() {
     if (apMode && !webServer.hostHeader().equalsIgnoreCase(WiFi.softAPIP().toString()) && !webServer.hostHeader().equalsIgnoreCase(deviceId + ".local")) {
         webServer.sendHeader("Location", String("http://192.168.4.1/"), true);
         webServer.send(302, "text/plain", ""); return;
     }
     
+    if (!apMode && !webServer.authenticate(config.wwwUser, config.wwwPass)) return webServer.requestAuthentication();
+    
     String pageTitle = deviceId + (apMode ? " - ACP/Setup" : " - Client");
-    String h = "<html><head><title>" + pageTitle + "</title><meta name='viewport' content='width=device-width'>" + String(dashStyle) + ipScript + "</head><body><div class='container'>";
+    String meta = "";
+    String h = "<html><head><title>" + pageTitle + "</title>" + meta + "<meta charset='UTF-8'><meta name='viewport' content='width=device-width'>" + String(dashStyle) + ipScript + "</head><body><div class='container'>";
     h += "<h1>" + pageTitle + "</h1>";
     if(apMode) {
         h += "<div class='stat diag'>ACP MODE: 192.168.4.1<br>HEAP: " + String(ESP.getFreeHeap()) + " Bytes <br>LAST REBOOT: " + ESP.getResetReason() + "</div>";
@@ -549,10 +822,13 @@ void handleRoot() {
     } else {
         h += "<div class='stat'>LOCAL IP: " + WiFi.localIP().toString() + "<br>STREAMS: " + String(activeClients) + " of " + String(MAX_TCP_CLIENTS) + " (MAX)</div>";
         h += "<div class='stat diag'>UPTIME: " + formatUptime() + "<br>HEAP: " + String(ESP.getFreeHeap()) + " Bytes<br>SIGNAL: " + String(WiFi.RSSI()) + " dBm<br>LAST REBOOT: " + ESP.getResetReason() + "</div>";
+        
+        h += "<a class='btn' href='/live-data' style='background:#ffcc00; color:#000;'>VIEW LIVE DATA</a>";
         h += "<a class='btn btn-raw' href='/raw'>VIEW RAW P1 DATA</a>";
         h += "<a class='btn' href='/settings' style='margin-top:12px;'>SYSTEM SETTINGS</a>";
     }
     h += getFooter() + "</div><script>var p=new URLSearchParams(window.location.search);if(p.has('s'))document.getElementById('ssid').value=decodeURIComponent(p.get('s'));</script></body></html>";
+    
     webServer.send(200, "text/html", h);
 }
 
@@ -576,12 +852,12 @@ void setup() {
     Serial.print("  BUILD    : "); Serial.print(__DATE__); Serial.print(" "); Serial.println(__TIME__);
     Serial.println("  WATCHDOG : ENABLED");
     Serial.println("  RX INVERT: ENABLED");
-    Serial.println("  PARSER   : DSMR V2 LINE-BUFFERED");
+    Serial.println("  PARSER   : DSMR V2 LINE-BUFFERED + PF");
     Serial.println("==============================================");
     
     // Initialize DSMR Parser
     dsmr_parser_init(&dsmr_parser, &dsmr_data);
-    Serial.println("[PARSER] DSMR Parser initialized");
+    Serial.println("[PARSER] DSMR Parser initialized with Power Factor support");
     Serial.print("[PARSER] RAM Usage: Parser=");
     Serial.print(sizeof(dsmr_parser_t));
     Serial.print(" Data=");
@@ -639,6 +915,7 @@ void setup() {
     
     /* --- WEB ROUTES --- */
     webServer.on("/", handleRoot);
+    webServer.on("/live-data", handleLive);
     webServer.on("/ncsi.txt", [](){ webServer.send(200, "text/plain", "Microsoft NCSI"); });
     webServer.on("/generate_204", handleRoot);
     
@@ -677,7 +954,7 @@ void setup() {
     
     webServer.on("/raw", [](){
         if(!webServer.authenticate(config.wwwUser, config.wwwPass)) return webServer.requestAuthentication();
-        String h = "<html><head><title>RAW P1 Data</title><meta http-equiv='refresh' content='60'><meta name='viewport' content='width=device-width'>";
+        String h = "<html><head><title>RAW P1 Data</title><meta charset='UTF-8'><meta http-equiv='refresh' content='60'><meta name='viewport' content='width=device-width'>";
         h += String(dashStyle) + "</head><body><div class='container'><h1>RAW P1 DATA</h1>";
         h += "<div class='stat' style='font-family:monospace; white-space:pre-wrap; text-align:left; font-size:0.85em;'>" + lastFrameBuffer + "</div>";
         h += "<a href='/raw' class='btn' style='background:#00aa00;color:#fff;margin-top:20px;'>REFRESH NOW</a>";
@@ -823,20 +1100,23 @@ void loop() {
         
         // Feed byte to DSMR parser
         if (dsmr_parse_byte(&dsmr_parser, c)) {
-            // Frame complete! Parser has filled dsmr_data structure
-            // You can now access parsed values via dsmr_data
-            // Example: float power = dsmr_get_current_power(&dsmr_data);
+            // Frame complete!
+            
+            // Only update if we have a valid meter ID (prevents empty/noise frames)
+            if (dsmr_data.meter_id[0] != 0) {
+                dsmr_last_good = dsmr_data;
+            }
             
             // Reset parser for next frame
             dsmr_parser_init(&dsmr_parser, &dsmr_data);
         }
         
-        // Forward to TCP clients (existing functionality)
+        // Forward to TCP clients
         for(int i=0; i<MAX_TCP_CLIENTS; i++) {
             if (TCPClient[i].connected()) TCPClient[i].write(c);
         }
         
-        // Buffer for /raw page (existing functionality)
+        // Buffer for /raw page
         if (tempBuffer.length() >= MAX_FRAME_SIZE) tempBuffer = "";
         tempBuffer += c; 
         if (c == '!') { 
