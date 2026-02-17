@@ -698,7 +698,7 @@ void handleLive() {
     // NEW: Summary box showing VA vs W
     h += "<div class='stat' style='border-left-color:#ff6600; color:#ff6600;'>";
     h += "<strong>POWER ANALYSIS:</strong><br>";
-    h += "Total Real Power (W): " + String(abs(net), 3) + " kW<br>";
+    h += "Total Real Power (W): " + String(net, 3) + " kW<br>";
     h += "Total Apparent Power (VA): " + String(total_va, 3) + " kVA<br>";
     
     float overall_pf = (total_va > 0.001) ? (abs(net) / total_va) : 0.0;
@@ -742,9 +742,9 @@ void handleLive() {
         float sum_power = p1 + p2 + p3;
         h += "<strong>VERIFICATION:</strong><br>";
         h += "Sum of phases: " + String(sum_power, 3) + " kW<br>";
-        h += "Meter total: " + String(abs(net), 3) + " kW ";
+        h += "Meter total: " + String(net, 3) + " kW ";
         
-        float diff = abs(sum_power - abs(net));
+        float diff = abs(sum_power - net);
         if (diff < 0.010) {
             h += "<span style='color:#00ff00;'>✓ Match!</span>";
         } else {
