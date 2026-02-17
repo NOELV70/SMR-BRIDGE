@@ -520,6 +520,10 @@ struct AppConfig {
     char staticIP[16];
     char gateway[16];
     char subnet[16];
+    bool useTcpDataSource;
+    char dataSourceHost[64];
+    uint16_t dataSourcePort;
+    uint16_t tcpServerPort;
 };
 
 AppConfig config;
@@ -527,6 +531,7 @@ String deviceId;
 ESP8266WebServer webServer(80);
 DNSServer dnsServer;
 WiFiServer tcpServer(TCP_PORT);
+WiFiClient dataSourceClient;
 WiFiClient TCPClient[MAX_TCP_CLIENTS];
 bool apMode = false;
 String lastFrameBuffer = "Waiting for P1 Data...";
@@ -539,7 +544,7 @@ dsmr_data_t dsmr_last_good;
 dsmr_parser_t dsmr_parser;
 
 // Watchdog and monitoring variables
-unsigned long lastSerialData = 0;
+unsigned long lastDataReceived = 0;
 unsigned long lastClientCheck = 0;
 unsigned long lastWiFiCheck = 0;
 unsigned long bootTime = 0;
@@ -815,12 +820,13 @@ void handleRoot() {
         h += "<div class='stat diag'>ACP MODE: 192.168.4.1<br>HEAP: " + String(ESP.getFreeHeap()) + " Bytes <br>LAST REBOOT: " + ESP.getResetReason() + "</div>";
         h += "<a href='/scan' class='btn' style='margin-bottom:12px;'>SCAN WIFI NETWORKS</a>";
         h += "<form method='POST' action='/saveConfig'><input name='ssid' id='ssid' placeholder='WiFi SSID'><input name='pass' type='password' placeholder='WiFi Password'>";
-        h += "<hr style='border:1px solid #333; margin:20px 0;'><strong>IP SETTINGS:</strong>" + ipFieldsHtml();
+        h += "<hr style='border:1px solid #333; margin:20px 0;'><strong>NETWORK SETTINGS:</strong>" + ipFieldsHtml();
+        h += "<input name='srv_port' type='number' placeholder='TCP Server Port (Default: 2001)' value='" + String(config.tcpServerPort) + "'>";
         h += "<button class='btn' style='margin-top:10px;'>SAVE & CONNECT</button></form>";
         h += "<a href='/update' class='btn' style='background:#004d40; color:#fff;'>FLASH FIRMWARE (OTA)</a>";
         h += "<form method='POST' action='/factReset' onsubmit=\"return confirm('ERASE ALL?')\"><button class='btn btn-red'>FACTORY RESET</button></form>";
     } else {
-        h += "<div class='stat'>LOCAL IP: " + WiFi.localIP().toString() + "<br>STREAMS: " + String(activeClients) + " of " + String(MAX_TCP_CLIENTS) + " (MAX)</div>";
+        h += "<div class='stat'>LOCAL IP: " + WiFi.localIP().toString() + ":" + String(config.tcpServerPort) + "<br>STREAMS: " + String(activeClients) + " of " + String(MAX_TCP_CLIENTS) + " (MAX)</div>";
         h += "<div class='stat diag'>UPTIME: " + formatUptime() + "<br>HEAP: " + String(ESP.getFreeHeap()) + " Bytes<br>SIGNAL: " + String(WiFi.RSSI()) + " dBm<br>LAST REBOOT: " + ESP.getResetReason() + "</div>";
         
         h += "<a class='btn' href='/live-data' style='background:#ffcc00; color:#000;'>VIEW LIVE DATA</a>";
@@ -839,11 +845,6 @@ void setup() {
     
     Serial.begin(115200);
     delay(100);
-    
-    // Enable RX inversion for direct P1 port connection
-    U0C0 |= BIT(UCRXI);
-    
-    delay(1000);
     ESP.wdtFeed();
     
     Serial.println("\r\n\n==============================================");
@@ -851,9 +852,6 @@ void setup() {
     Serial.print("  CODENAME : "); Serial.println(KERNEL_CODENAME);
     Serial.print("  BUILD    : "); Serial.print(__DATE__); Serial.print(" "); Serial.println(__TIME__);
     Serial.println("  WATCHDOG : ENABLED");
-    Serial.println("  RX INVERT: ENABLED");
-    Serial.println("  PARSER   : DSMR V2 LINE-BUFFERED + PF");
-    Serial.println("==============================================");
     
     // Initialize DSMR Parser
     dsmr_parser_init(&dsmr_parser, &dsmr_data);
@@ -873,9 +871,28 @@ void setup() {
         config.dhcpMode = true;
         strcpy(config.wwwUser, "admin"); strcpy(config.wwwPass, "admin");
         strcpy(config.staticIP, "192.168.4.1"); strcpy(config.gateway, "192.168.4.1"); strcpy(config.subnet, "255.255.255.0");
+        config.useTcpDataSource = false;
+        config.dataSourcePort = 2001;
+        strcpy(config.dataSourceHost, "");
+        config.tcpServerPort = 2001;
         EEPROM.write(0, MAGIC_KEY); EEPROM.put(1, config); EEPROM.commit(); 
     } else { EEPROM.get(1, config); }
     
+    // Ensure valid port if upgrading from older firmware
+    if (config.tcpServerPort == 0) config.tcpServerPort = 2001;
+
+    // Enable RX inversion for direct P1 port connection, if not using TCP source
+    if (!config.useTcpDataSource) {
+        U0C0 |= BIT(UCRXI);
+        Serial.println("  RX INVERT: ENABLED (P1 Port Mode)");
+    } else {
+        Serial.println("  RX INVERT: DISABLED (TCP Source Mode)");
+    }
+    Serial.println("  PARSER   : DSMR V2 LINE-BUFFERED + PF");
+    Serial.println("==============================================");
+
+    delay(1000);
+
     uint8_t mac[6]; WiFi.macAddress(mac); char devName[32];
     sprintf(devName, "SMR-BRIDGE-%02X%02X%02X", mac[3], mac[4], mac[5]); deviceId = String(devName);
     
@@ -905,8 +922,8 @@ void setup() {
     } else {
         Serial.println("\n[SERIAL] ONLINE: " + WiFi.localIP().toString());
         MDNS.begin("smr");
-        bootTime = millis();
-        lastSerialData = millis();
+        bootTime = millis(); 
+        lastDataReceived = millis();
         lastClientCheck = millis();
         lastWiFiCheck = millis();
     }
@@ -968,6 +985,7 @@ void setup() {
         String h = "<html><head><title>Settings</title>"+String(dashStyle)+ipScript+"</head><body><div class='container'><h1>SETTINGS</h1>";
         h += "<a href='/config/wifi' class='btn'>WIFI & NETWORK</a>";
         h += "<a href='/config/auth' class='btn'>ADMIN SECURITY</a>";
+        h += "<a href='/config/source' class='btn' style='background:#2E8B57; color:#fff;'>DATA SOURCE</a>";
         h += "<a href='/update' class='btn' style='background:#004d40; color:#fff;'>FLASH FIRMWARE (OTA)</a>";
         h += "<form method='POST' action='/factReset' onsubmit=\"return confirm('Reset Everything?')\"><button class='btn btn-red'>FACTORY RESET</button></form>";
         h += "<a href='/' class='btn' style='background:#333;color:#fff;'>BACK</a></div>"+getFooter()+"</body></html>";
@@ -979,7 +997,8 @@ void setup() {
         String h = "<html><head><title>WiFi & Network</title>"+String(dashStyle)+ipScript+"</head><body><div class='container'><h1>WIFI & NETWORK</h1>";
         h += "<a href='/scan' class='btn' style='margin-bottom:12px;'>SCAN WIFI NETWORKS</a>";
         h += "<form method='POST' action='/saveConfig'><input name='ssid' id='ssid' placeholder='WiFi SSID' value='"+String(config.wifiSsid)+"'><input name='pass' type='password' placeholder='WiFi Password'>";
-        h += "<hr style='border:1px solid #333; margin:20px 0;'><strong>IP SETTINGS:</strong>" + ipFieldsHtml();
+        h += "<hr style='border:1px solid #333; margin:20px 0;'><strong>NETWORK SETTINGS:</strong>" + ipFieldsHtml();
+        h += "<div style='margin-top:10px;'><strong>TCP SERVER PORT:</strong><input name='srv_port' type='number' placeholder='Port (Default: 2001)' value='" + String(config.tcpServerPort) + "'></div>";
         h += "<button class='btn'>SAVE SETTINGS</button></form>";
         h += "<a href='/settings' class='btn' style='background:#333;color:#fff;'>BACK</a></div>"+getFooter();
         h += "<script>var p=new URLSearchParams(window.location.search);if(p.has('s'))document.getElementById('ssid').value=decodeURIComponent(p.get('s'));</script>";
@@ -996,6 +1015,29 @@ void setup() {
         h += "<a href='/settings' class='btn' style='background:#333;color:#fff;'>BACK</a></div>"+getFooter()+"</body></html>";
         webServer.send(200, "text/html", h);
     });
+
+    webServer.on("/config/source", [](){
+        if(!webServer.authenticate(config.wwwUser, config.wwwPass)) return webServer.requestAuthentication();
+        String h = "<html><head><title>Data Source</title>"+String(dashStyle);
+        h += "<script>"
+            "function toggleSource(){ var d=document.getElementById('source_mode').value=='1';"
+            "document.getElementById('tcpSourceFields').style.display=d?'block':'none'; }"
+            "</script>";
+        h += "</head><body onload='toggleSource()'><div class='container'><h1>DATA SOURCE</h1>";
+        h += "<div class='stat diag'>Select where to get the P1 data from.</div>";
+        h += "<form method='POST' action='/saveSource'>";
+        h += "<strong>DATA INPUT METHOD:</strong>";
+        h += "<select name='source_mode' id='source_mode' onchange='toggleSource()'>";
+        h += "<option value='0' " + String(!config.useTcpDataSource ? "selected" : "") + ">Local Serial (P1 Port)</option>";
+        h += "<option value='1' " + String(config.useTcpDataSource ? "selected" : "") + ">Remote TCP Stream</option></select>";
+        h += "<div id='tcpSourceFields' style='display:" + String(config.useTcpDataSource ? "block" : "none") + "'>";
+        h += "<input name='host' placeholder='Remote Host or IP' value='" + String(config.dataSourceHost) + "'>";
+        h += "<input name='port' type='number' placeholder='Port' value='" + String(config.dataSourcePort) + "'>";
+        h += "</div>";
+        h += "<button class='btn'>SAVE & REBOOT</button></form>";
+        h += "<a href='/settings' class='btn' style='background:#333;color:#fff;'>BACK</a></div>"+getFooter()+"</body></html>";
+        webServer.send(200, "text/html", h);
+    });
     
     webServer.on("/saveConfig", HTTP_POST, [](){
         strncpy(config.wifiSsid, webServer.arg("ssid").c_str(), 32);
@@ -1004,6 +1046,8 @@ void setup() {
         strncpy(config.staticIP, webServer.arg("ip").c_str(), 15);
         strncpy(config.gateway, webServer.arg("gw").c_str(), 15);
         strncpy(config.subnet, webServer.arg("sn").c_str(), 15);
+        config.tcpServerPort = webServer.arg("srv_port").toInt();
+        if (config.tcpServerPort == 0) config.tcpServerPort = 2001;
         EEPROM.put(1, config); EEPROM.commit();
         webServer.send(200, "text/plain", "Saved. Rebooting..."); delay(1000); ESP.restart();
     });
@@ -1016,6 +1060,16 @@ void setup() {
         webServer.send(200, "text/plain", "Saved. Please log in again."); 
     });
     
+    webServer.on("/saveSource", HTTP_POST, [](){
+        if(!webServer.authenticate(config.wwwUser, config.wwwPass)) return webServer.requestAuthentication();
+        config.useTcpDataSource = (webServer.arg("source_mode") == "1");
+        strncpy(config.dataSourceHost, webServer.arg("host").c_str(), sizeof(config.dataSourceHost)-1);
+        config.dataSourcePort = webServer.arg("port").toInt();
+        
+        EEPROM.put(1, config); EEPROM.commit();
+        webServer.send(200, "text/plain", "Saved. Rebooting..."); delay(1000); ESP.restart();
+    });
+
     webServer.on("/factReset", HTTP_POST, [](){ 
         for (int i=0; i<512; i++) EEPROM.write(i, 0); 
         EEPROM.commit(); 
@@ -1039,7 +1093,41 @@ void setup() {
     
     webServer.onNotFound(handleRoot);
     webServer.begin(); 
-    tcpServer.begin();
+    tcpServer.begin(config.tcpServerPort);
+}
+
+void processDataByte(char c) {
+    // Update watchdog timestamp
+    if (!apMode) {
+        lastDataReceived = millis();
+    }
+    
+    // Feed byte to DSMR parser
+    if (dsmr_parse_byte(&dsmr_parser, c)) {
+        // Frame complete!
+        
+        // Only update if we have a valid meter ID (prevents empty/noise frames)
+        if (dsmr_data.meter_id[0] != 0) {
+            dsmr_last_good = dsmr_data;
+        }
+        
+        // Reset parser for next frame
+        dsmr_parser_init(&dsmr_parser, &dsmr_data);
+    }
+    
+    // Forward to TCP clients
+    for(int i=0; i<MAX_TCP_CLIENTS; i++) {
+        if (TCPClient[i].connected()) TCPClient[i].write(c);
+    }
+    
+    // Buffer for /raw page
+    if (tempBuffer.length() >= MAX_FRAME_SIZE) tempBuffer = "";
+    tempBuffer += c; 
+    if (c == '!') { 
+        lastFrameBuffer = tempBuffer; 
+        tempBuffer = "";
+        ESP.wdtFeed();
+    }
 }
 
 void loop() {
@@ -1063,8 +1151,8 @@ void loop() {
             lastWiFiCheck = now;
         }
         
-        if (now - lastSerialData > WATCHDOG_TIMEOUT) {
-            Serial.println("\n[WATCHDOG] No serial data for 10 minutes. Rebooting...");
+        if (now - lastDataReceived > WATCHDOG_TIMEOUT) {
+            Serial.println("\n[WATCHDOG] No data received for 10 minutes. Rebooting...");
             delay(1000);
             ESP.restart();
         }
@@ -1090,39 +1178,26 @@ void loop() {
         }
     }
     
-    while (Serial.available()) {
-        char c = Serial.read();
-        
-        // Update watchdog timestamp
-        if (!apMode) {
-            lastSerialData = millis();
-        }
-        
-        // Feed byte to DSMR parser
-        if (dsmr_parse_byte(&dsmr_parser, c)) {
-            // Frame complete!
-            
-            // Only update if we have a valid meter ID (prevents empty/noise frames)
-            if (dsmr_data.meter_id[0] != 0) {
-                dsmr_last_good = dsmr_data;
+    // --- DATA SOURCE HANDLING ---
+    if (config.useTcpDataSource && !apMode) {
+        // TCP Data Source Mode
+        if (!dataSourceClient.connected()) {
+            Serial.printf("[TCP-SRC] Connecting to %s:%u...\n", config.dataSourceHost, config.dataSourcePort);
+            if (!dataSourceClient.connect(config.dataSourceHost, config.dataSourcePort)) {
+                Serial.println("[TCP-SRC] Connection failed. Retrying in 5s...");
+                delay(5000); // Don't hammer the remote host
+            } else {
+                Serial.println("[TCP-SRC] Connected to data source.");
             }
-            
-            // Reset parser for next frame
-            dsmr_parser_init(&dsmr_parser, &dsmr_data);
         }
-        
-        // Forward to TCP clients
-        for(int i=0; i<MAX_TCP_CLIENTS; i++) {
-            if (TCPClient[i].connected()) TCPClient[i].write(c);
+
+        while (dataSourceClient.available()) {
+            processDataByte(dataSourceClient.read());
         }
-        
-        // Buffer for /raw page
-        if (tempBuffer.length() >= MAX_FRAME_SIZE) tempBuffer = "";
-        tempBuffer += c; 
-        if (c == '!') { 
-            lastFrameBuffer = tempBuffer; 
-            tempBuffer = "";
-            ESP.wdtFeed();
+    } else {
+        // Default: Serial Data Source Mode
+        while (Serial.available()) {
+            processDataByte(Serial.read());
         }
     }
     
