@@ -601,8 +601,8 @@ WiFiClient  dataSourceClient;
 WiFiClient  TCPClient[MAX_TCP_CLIENTS];
 bool        apMode = false;
 String      lastFrameBuffer = "Waiting for P1 Data...";
-String      tempBuffer      = "";
-// Track whether tempBuffer overflowed before the last '!'
+char        tempBuffer[MAX_FRAME_SIZE];
+uint16_t    tempBufferIndex = 0;
 bool        tempOverflowed  = false;
 bool        frameEndDetected = false;
 int         activeClients   = 0;
@@ -936,7 +936,7 @@ void handleLive() {
         webServer.sendContent(F("</div>"));
     }
 
-    // ---- EDUCATIONAL GUIDE ----
+#if(0)    // ---- EDUCATIONAL GUIDE ----
     webServer.sendContent(F(
         "<div class='stat' style='font-size:0.75em;color:#999;border-left-color:#444;'>"
         "<strong>UNDERSTANDING POWER &amp; CURRENT:</strong><br>"
@@ -953,6 +953,7 @@ void handleLive() {
     webServer.sendContent(dsmr_last_good.has_pf_data
         ? "PF DATA: From Meter" : "PF DATA: Calculated from VxI/P");
     webServer.sendContent(F("</div>"));
+#endif
 
     // ---- BUTTONS + FOOTER ----
     webServer.sendContent(F(
@@ -1146,7 +1147,7 @@ void setup() {
     webServer.on("/raw", [](){
         if (!webServer.authenticate(config.wwwUser, config.wwwPass)) return webServer.requestAuthentication();
         String h = "<html><head><title>RAW P1 Data</title><meta charset='UTF-8'>"
-                   "<meta http-equiv='refresh' content='60'><meta name='viewport' content='width=device-width'>"
+                   "<meta http-equiv='refresh' content='5'><meta name='viewport' content='width=device-width'>"
                    + String(dashStyle) + "</head><body><div class='container'><h1>RAW P1 DATA</h1>"
                    "<div class='stat' style='font-family:monospace;white-space:pre-wrap;text-align:left;font-size:0.85em;'>"
                    + lastFrameBuffer + "</div>"
@@ -1164,7 +1165,7 @@ void setup() {
                    "<a href='/config/source' class='btn' style='background:#2E8B57;color:#fff;'>DATA SOURCE</a>"
                    "<a href='/update' class='btn' style='background:#004d40;color:#fff;'>FLASH FIRMWARE (OTA)</a>"
                    "<form method='POST' action='/factReset' onsubmit=\"return confirm('Reset Everything?')\"><button class='btn btn-red'>FACTORY RESET</button></form>"
-                   "<a href='/' class='btn' style='background:#333;color:#fff;'>BACK</a></div>" + getFooter() + "</body></html>";
+                   "<a href='/' class='btn' style='background:#333;color:#fff;'>BACK</a>" + getFooter() + "</div></body></html>";
         webServer.send(200, "text/html", h);
     });
 
@@ -1179,7 +1180,7 @@ void setup() {
                    "<div style='margin-top:10px;'><strong>TCP SERVER PORT:</strong>"
                    "<input name='srv_port' type='number' placeholder='Port (Default: 2001)' value='" + String(config.tcpServerPort) + "'></div>"
                    "<button class='btn'>SAVE SETTINGS</button></form>"
-                   "<a href='/settings' class='btn' style='background:#333;color:#fff;'>BACK</a></div>" + getFooter() +
+                   "<a href='/settings' class='btn' style='background:#333;color:#fff;'>BACK</a>" + getFooter() + "</div>" +
                    "<script>var p=new URLSearchParams(window.location.search);"
                    "if(p.has('s'))document.getElementById('ssid').value=decodeURIComponent(p.get('s'));</script>"
                    "</body></html>";
@@ -1193,7 +1194,7 @@ void setup() {
                    "<input name='user' placeholder='Username' value='" + String(config.wwwUser) + "'>"
                    "<input name='pass' type='password' placeholder='New Password'>"
                    "<button class='btn'>UPDATE CREDENTIALS</button></form>"
-                   "<a href='/settings' class='btn' style='background:#333;color:#fff;'>BACK</a></div>" + getFooter() + "</body></html>";
+                   "<a href='/settings' class='btn' style='background:#333;color:#fff;'>BACK</a>" + getFooter() + "</div></body></html>";
         webServer.send(200, "text/html", h);
     });
 
@@ -1213,7 +1214,7 @@ void setup() {
              "<input name='host' placeholder='Remote Host or IP' value='" + String(config.dataSourceHost) + "'>"
              "<input name='port' type='number' placeholder='Port' value='" + String(config.dataSourcePort) + "'></div>"
              "<button class='btn'>SAVE & REBOOT</button></form>"
-             "<a href='/settings' class='btn' style='background:#333;color:#fff;'>BACK</a></div>" + getFooter() + "</body></html>";
+             "<a href='/settings' class='btn' style='background:#333;color:#fff;'>BACK</a>" + getFooter() + "</div></body></html>";
         webServer.send(200, "text/html", h);
     });
 
@@ -1301,39 +1302,43 @@ void processDataByte(char c) {
         if (TCPClient[i].connected()) TCPClient[i].write(c);
     }
 
-    // Sync RAW buffer on start of frame ('/') to prevent noise overflow
+    // A '/' always marks the start of a new, clean frame. Reset raw buffer.
     if (c == '/') {
-        if (tempBuffer.length() > 0) Serial.println(F("[RAW] Resetting buffer on '/' (Incomplete Frame?)"));
-        tempBuffer = "";
+        if (tempBufferIndex > 0) Serial.println(F("[RAW] Discarding incomplete frame, new one starting."));
+        tempBufferIndex = 0;
         tempOverflowed = false;
         frameEndDetected = false;
     }
 
-    // Only update lastFrameBuffer if tempBuffer has not overflowed.
-    // An overflow means we cleared mid-frame and would store garbage.
-    if (tempBuffer.length() >= MAX_FRAME_SIZE) {
-        if (!tempOverflowed) Serial.println(F("[RAW] Buffer Overflow!"));
-        tempBuffer     = "";
-        tempOverflowed = true;  // Mark so we skip the next '!' assignment
-        frameEndDetected = false;
+    // If we are in an overflow state, we ignore all incoming bytes until the next '/'
+    // which will reset the tempOverflowed flag.
+    if (tempOverflowed) {
+        return;
     }
-    tempBuffer += c;
+
+    // Add the current byte to our temporary buffer if there is space.
+    if (tempBufferIndex < MAX_FRAME_SIZE) {
+        tempBuffer[tempBufferIndex++] = c;
+    }
+
+    // Now, check if adding that byte caused an overflow.
+    if (tempBufferIndex >= MAX_FRAME_SIZE) {
+        Serial.println(F("[RAW] Buffer Overflow! Discarding frame. Waiting for next '/'."));
+        tempBufferIndex = 0;
+        tempOverflowed = true;  // Set the overflow state.
+        frameEndDetected = false;
+        return; // Ignore the rest of this broken frame.
+    }
 
     if (c == '!') {
         frameEndDetected = true;
-        Serial.println(F("[RAW] '!' detected"));
     }
 
     if (frameEndDetected && c == '\n') {
-        if (!tempOverflowed) {
-            lastFrameBuffer = tempBuffer;
-            Serial.print(F("[RAW] Frame captured ("));
-            Serial.print(tempBuffer.length());
-            Serial.println(F(" bytes)"));
-        } else {
-            Serial.println(F("[RAW] Frame ignored due to overflow"));
-        }
-        tempBuffer     = "";
+        tempBuffer[tempBufferIndex] = '\0'; // Null-terminate C-string
+        lastFrameBuffer = tempBuffer;
+        Serial.printf("[RAW] Frame captured (%u bytes)\n", tempBufferIndex);
+        tempBufferIndex = 0;
         tempOverflowed = false;
         frameEndDetected = false;
         ESP.wdtFeed();
@@ -1391,13 +1396,16 @@ void loop() {
                 lastTcpConnectAttempt = millis();
                 Serial.printf("[TCP-SRC] Connecting to %s:%u...\n", config.dataSourceHost, config.dataSourcePort);
                 if (dataSourceClient.connect(config.dataSourceHost, config.dataSourcePort)) {
-                    Serial.println("[TCP-SRC] Connected.");
+                    Serial.println("[TCP-SRC] Connection established. Waiting for start of next data frame ('/')...");
                 } else {
-                    Serial.println("[TCP-SRC] Failed. Retrying later...");
+                    // "Connecting..." message is sufficient, no need to log "Failed" every 5 seconds.
                 }
             }
         }
-        while (dataSourceClient.available()) processDataByte(dataSourceClient.read());
+        // Only process data if we are actually connected.
+        if (dataSourceClient.connected()) {
+            while (dataSourceClient.available()) processDataByte(dataSourceClient.read());
+        }
     } else {
         while (Serial.available()) processDataByte(Serial.read());
     }
