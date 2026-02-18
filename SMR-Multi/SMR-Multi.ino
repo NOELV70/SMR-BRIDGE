@@ -604,6 +604,7 @@ String      lastFrameBuffer = "Waiting for P1 Data...";
 String      tempBuffer      = "";
 // Track whether tempBuffer overflowed before the last '!'
 bool        tempOverflowed  = false;
+bool        frameEndDetected = false;
 int         activeClients   = 0;
 
 // DSMR Parser instances
@@ -1300,20 +1301,41 @@ void processDataByte(char c) {
         if (TCPClient[i].connected()) TCPClient[i].write(c);
     }
 
+    // Sync RAW buffer on start of frame ('/') to prevent noise overflow
+    if (c == '/') {
+        if (tempBuffer.length() > 0) Serial.println(F("[RAW] Resetting buffer on '/' (Incomplete Frame?)"));
+        tempBuffer = "";
+        tempOverflowed = false;
+        frameEndDetected = false;
+    }
+
     // Only update lastFrameBuffer if tempBuffer has not overflowed.
     // An overflow means we cleared mid-frame and would store garbage.
     if (tempBuffer.length() >= MAX_FRAME_SIZE) {
+        if (!tempOverflowed) Serial.println(F("[RAW] Buffer Overflow!"));
         tempBuffer     = "";
         tempOverflowed = true;  // Mark so we skip the next '!' assignment
+        frameEndDetected = false;
     }
     tempBuffer += c;
 
     if (c == '!') {
+        frameEndDetected = true;
+        Serial.println(F("[RAW] '!' detected"));
+    }
+
+    if (frameEndDetected && c == '\n') {
         if (!tempOverflowed) {
             lastFrameBuffer = tempBuffer;
+            Serial.print(F("[RAW] Frame captured ("));
+            Serial.print(tempBuffer.length());
+            Serial.println(F(" bytes)"));
+        } else {
+            Serial.println(F("[RAW] Frame ignored due to overflow"));
         }
         tempBuffer     = "";
         tempOverflowed = false;
+        frameEndDetected = false;
         ESP.wdtFeed();
     }
 }
