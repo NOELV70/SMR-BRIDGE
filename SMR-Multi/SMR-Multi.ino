@@ -969,7 +969,7 @@ void handleRoot() {
     if (apMode &&
         !webServer.hostHeader().equalsIgnoreCase(WiFi.softAPIP().toString()) &&
         !webServer.hostHeader().equalsIgnoreCase(deviceId + ".local")) {
-        webServer.sendHeader("Location", "http://192.168.4.1/", true);
+        webServer.sendHeader("Location", "http://" + WiFi.softAPIP().toString() + "/", true);
         webServer.send(302, "text/plain", "");
         return;
     }
@@ -984,7 +984,7 @@ void handleRoot() {
     h += "<h1>" + pageTitle + "</h1>";
 
     if (apMode) {
-        h += "<div class='stat diag'>ACP MODE: 192.168.4.1<br>HEAP: " + String(ESP.getFreeHeap()) + " Bytes<br>LAST REBOOT: " + ESP.getResetReason() + "</div>";
+        h += "<div class='stat diag'>ACP MODE: " + WiFi.softAPIP().toString() + "<br>HEAP: " + String(ESP.getFreeHeap()) + " Bytes<br>LAST REBOOT: " + ESP.getResetReason() + "</div>";
         h += "<a href='/scan' class='btn' style='margin-bottom:12px;'>SCAN WIFI NETWORKS</a>";
         h += "<form method='POST' action='/saveConfig'>"
              "<input name='ssid' id='ssid' placeholder='WiFi SSID'>"
