@@ -1348,6 +1348,26 @@ void processDataByte(char c) {
 void loop() {
     ESP.wdtFeed();
 
+    // If we were in AP mode but the station has now connected, transition to client mode.
+    // This handles the case where the target WiFi network was down at boot but came
+    // back online later. The ESP8266 background process will connect automatically.
+    if (apMode && WiFi.status() == WL_CONNECTED) {
+        Serial.println("\n[NET] Client connected, transitioning from AP to Client mode.");
+        apMode = false;
+
+        dnsServer.stop();
+        WiFi.mode(WIFI_STA); // This also disables the softAP.
+
+        Serial.println("[NET] ONLINE: " + WiFi.localIP().toString());
+        MDNS.begin("smr");
+
+        // Initialize client-mode timers now that we are online
+        bootTime          = millis();
+        lastDataReceived  = millis();
+        lastClientCheck   = millis();
+        lastWiFiCheck     = millis();
+    }
+
     if (apMode) dnsServer.processNextRequest();
     webServer.handleClient();
 
