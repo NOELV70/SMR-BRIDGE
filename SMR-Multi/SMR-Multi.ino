@@ -1351,24 +1351,32 @@ void loop() {
     // If we were in AP mode but the station has now connected, transition to client mode.
     // This handles the case where the target WiFi network was down at boot but came
     // back online later. The ESP8266 background process will connect automatically.
+    // NOTE: WiFi.status() reflects the STATION interface (connection to Router).
+    // It does not trigger if a user connects to our SoftAP.
     if (apMode && WiFi.status() == WL_CONNECTED) {
-        Serial.println("\n[NET] Client connected, transitioning from AP to Client mode.");
+        Serial.println(F("\n[NET] Station connected to Uplink, transitioning from AP to Client mode."));
         apMode = false;
 
         dnsServer.stop();
-        WiFi.mode(WIFI_STA); // This also disables the softAP.
+        
+        // Only disable SoftAP if no one is using it. If a user is configuring
+        // the device (e.g. scanning), cutting the AP would look like a failure.
+        if (WiFi.softAPgetStationNum() == 0) {
+            WiFi.mode(WIFI_STA);
+        }
 
         Serial.println("[NET] ONLINE: " + WiFi.localIP().toString());
         MDNS.begin("smr");
 
         // Initialize client-mode timers now that we are online
         bootTime          = millis();
-        lastDataReceived  = millis();
-        lastClientCheck   = millis();
-        lastWiFiCheck     = millis();
+        lastDataReceived  = bootTime;
+        lastClientCheck   = lastDataReceived;
+        lastWiFiCheck     = lastClientCheck;
     }
 
     if (apMode) dnsServer.processNextRequest();
+    MDNS.update();
     webServer.handleClient();
 
     // SOFTWARE WATCHDOG - client mode only
