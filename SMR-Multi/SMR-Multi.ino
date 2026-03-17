@@ -568,14 +568,19 @@ String dsmr_get_direction_l3(const dsmr_data_t *data) {
 #define UCRXI       19
 
 #define KERNEL_VERSION    "6.2.0"
-#define KERNEL_CODENAME   "GOOSE-PF"
+#define KERNEL_CODENAME   "GOOSE-TRI-MODE"
 // Magic key incremented to 0x52 because config struct changed
 // (pf_* widened from int16_t to int32_t). All devices will factory-reset
 // once on first boot of this version, which is intentional.
-#define MAGIC_KEY         0x52
+// Incremented to 0x53 for System Mode support
+#define MAGIC_KEY         0x53
 #define TCP_PORT          2001
 #define MAX_TCP_CLIENTS   10
 #define MAX_FRAME_SIZE    1500
+
+#define MODE_SETUP  0
+#define MODE_CLIENT 1
+#define MODE_ACP    2
 
 struct AppConfig {
     char     wifiSsid[33];
@@ -590,6 +595,7 @@ struct AppConfig {
     char     dataSourceHost[64];
     uint16_t dataSourcePort;
     uint16_t tcpServerPort;
+    uint8_t  systemMode;
 };
 
 AppConfig   config;
@@ -657,6 +663,23 @@ const char* ipScript =
 "document.getElementById('staticFields').style.display=d?'block':'none';}"
 "</script>";
 
+const char* modeScript =
+"<script>"
+"function toggleMode(){"
+" var m=document.getElementById('sys_mode').value;"
+" var isClient=(m=='1');"
+" document.getElementById('clientFields').style.display=isClient?'block':'none';"
+"}"
+"</script>";
+
+String modeSelectHtml() {
+    String s = "<strong>OPERATING MODE:</strong><select name='sys_mode' id='sys_mode' onchange='toggleMode()'>";
+    s += "<option value='0' " + String(config.systemMode == MODE_SETUP ? "selected" : "") + ">SETUP (Config Only)</option>";
+    s += "<option value='1' " + String(config.systemMode == MODE_CLIENT ? "selected" : "") + ">CLIENT (Connect to WiFi)</option>";
+    s += "<option value='2' " + String(config.systemMode == MODE_ACP ? "selected" : "") + ">ACP (Standalone AP)</option></select>";
+    return s;
+}
+
 String getFooter() {
     return "<div class='footer'>KERNEL: " + String(KERNEL_VERSION) + " [" + String(KERNEL_CODENAME) + "]<br>"
            "BUILD: " + String(__DATE__) + " " + String(__TIME__) + "<br>"
@@ -719,6 +742,12 @@ void handleLive() {
     webServer.sendHeader("Expires", "0");
     webServer.send(200, "text/html", "");
 
+    // Shared buffer for HTML generation (Max usage ~320 bytes in Power Analysis)
+    char buf[400];
+
+    // Reset client watchdog so viewing the UI prevents "No Clients" reboot
+    lastClientCheck = millis();
+
     // ---- HEAD ----
     webServer.sendContent(F("<html><head><title>Live P1</title>"
                             "<meta charset='UTF-8'>"
@@ -728,7 +757,6 @@ void handleLive() {
 
     // ---- TIMESTAMP / METER ID ----
     {
-        char buf[128];
         snprintf(buf, sizeof(buf),
                  "<div class='stat diag'>TIMESTAMP: %s<br>METER ID: %s</div>",
                  dsmr_last_good.timestamp, dsmr_last_good.meter_id);
@@ -740,7 +768,6 @@ void handleLive() {
         float net   = dsmr_get_current_power(&dsmr_last_good);
         const char *col   = (net >= 0) ? "#ffcc00" : "#00ffcc";
         const char *label = (net >= 0) ? "CONSUMPTION: " : "INJECTION: ";
-        char buf[160];
         snprintf(buf, sizeof(buf),
                  "<div class='stat' style='border-left-color:%s;color:%s;'>"
                  "CURRENT %s%.3f kW</div>",
@@ -750,7 +777,6 @@ void handleLive() {
 
     // ---- ENERGY TOTALS ----
     {
-        char buf[160];
         snprintf(buf, sizeof(buf),
                  "<div class='stat'>TOTAL CONSUMED: %.3f kWh<br>"
                  "TOTAL PRODUCED: %.3f kWh</div>",
@@ -796,7 +822,6 @@ void handleLive() {
     // ---- POWER ANALYSIS SUMMARY ----
     {
         float overall_pf = (total_va > 0.001f) ? (fabsf(net) / total_va) : 0.0f;
-        char buf[320];
         snprintf(buf, sizeof(buf),
                  "<div class='stat' style='border-left-color:#ff6600;color:#ff6600;'>"
                  "<strong>POWER ANALYSIS:</strong><br>"
@@ -807,11 +832,10 @@ void handleLive() {
         webServer.sendContent(buf);
 
         if (overall_pf < 0.90f) {
-            char warn[96];
-            snprintf(warn, sizeof(warn),
+            snprintf(buf, sizeof(buf),
                      "<br><span style='color:#ff3300;'>! Wasted Capacity: %.3f kVA (reactive)</span>",
                      total_va - fabsf(net));
-            webServer.sendContent(warn);
+            webServer.sendContent(buf);
         }
         webServer.sendContent(F("</div>"));
     }
@@ -822,7 +846,6 @@ void handleLive() {
     if (dsmr_last_good.is_3phase) {
         // L1
         {
-            char buf[192];
             snprintf(buf, sizeof(buf),
                      "<strong>L1:</strong> %.1fV | %s%.3fA | %.3fkVA -&gt; %s%.3fkW",
                      v1,
@@ -831,15 +854,13 @@ void handleLive() {
                      (p1 >= 0) ? "+" : "", p1);
             webServer.sendContent(buf);
             if (va1 > 0.001f) {
-                char pf_buf[32];
-                snprintf(pf_buf, sizeof(pf_buf), " (PF=%.3f)", pf1);
-                webServer.sendContent(pf_buf);
+                snprintf(buf, sizeof(buf), " (PF=%.3f)", pf1);
+                webServer.sendContent(buf);
             }
             webServer.sendContent(F("<br>"));
         }
         // L2
         {
-            char buf[192];
             snprintf(buf, sizeof(buf),
                      "<strong>L2:</strong> %.1fV | %s%.3fA | %.3fkVA -&gt; %s%.3fkW",
                      v2,
@@ -848,15 +869,13 @@ void handleLive() {
                      (p2 >= 0) ? "+" : "", p2);
             webServer.sendContent(buf);
             if (va2 > 0.001f) {
-                char pf_buf[32];
-                snprintf(pf_buf, sizeof(pf_buf), " (PF=%.3f)", pf2);
-                webServer.sendContent(pf_buf);
+                snprintf(buf, sizeof(buf), " (PF=%.3f)", pf2);
+                webServer.sendContent(buf);
             }
             webServer.sendContent(F("<br>"));
         }
         // L3
         {
-            char buf[192];
             snprintf(buf, sizeof(buf),
                      "<strong>L3:</strong> %.1fV | %s%.3fA | %.3fkVA -&gt; %s%.3fkW",
                      v3,
@@ -865,9 +884,8 @@ void handleLive() {
                      (p3 >= 0) ? "+" : "", p3);
             webServer.sendContent(buf);
             if (va3 > 0.001f) {
-                char pf_buf[32];
-                snprintf(pf_buf, sizeof(pf_buf), " (PF=%.3f)", pf3);
-                webServer.sendContent(pf_buf);
+                snprintf(buf, sizeof(buf), " (PF=%.3f)", pf3);
+                webServer.sendContent(buf);
             }
             webServer.sendContent(F("<br><br>"));
         }
@@ -876,7 +894,6 @@ void handleLive() {
         {
             float sum_power = p1 + p2 + p3;
             float diff      = fabsf(sum_power - net);
-            char buf[160];
             snprintf(buf, sizeof(buf),
                      "<strong>VERIFICATION:</strong><br>"
                      "Sum of phases: %.3f kW<br>"
@@ -886,10 +903,9 @@ void handleLive() {
             if (diff < 0.010f) {
                 webServer.sendContent(F("<span style='color:#00ff00;'>✓ Match!</span>"));
             } else {
-                char dif[48];
-                snprintf(dif, sizeof(dif),
+                snprintf(buf, sizeof(buf),
                          "<span style='color:#ffaa00;'>! Delta=%.3fkW</span>", diff);
-                webServer.sendContent(dif);
+                webServer.sendContent(buf);
             }
         }
         webServer.sendContent(F("</div>"));
@@ -904,7 +920,6 @@ void handleLive() {
 
             webServer.sendContent("<div class='stat " + pfClass + "'><strong>PHASE POWER FACTOR:</strong><br>");
 
-            char buf[96];
             snprintf(buf, sizeof(buf), "<span style='color:%s'>L1: ", getPFColor(pf1).c_str());
             webServer.sendContent(buf);
             webServer.sendContent(formatPF(pf1));
@@ -919,15 +934,13 @@ void handleLive() {
     } else {
         // Single-phase
         {
-            char buf[160];
             snprintf(buf, sizeof(buf),
                      "MAIN: %.1fV | %.3fA | %.3fkVA -&gt; %.3fkW",
                      v1, c1, va1, net);
             webServer.sendContent(buf);
             if (va1 > 0.001f) {
-                char pf_buf[32];
-                snprintf(pf_buf, sizeof(pf_buf), " (PF=%.3f)", pf1);
-                webServer.sendContent(pf_buf);
+                snprintf(buf, sizeof(buf), " (PF=%.3f)", pf1);
+                webServer.sendContent(buf);
             }
             webServer.sendContent(F("</div>"));
         }
@@ -966,6 +979,11 @@ void handleLive() {
 }
 
 void handleRoot() {
+    bool isSetupUI = (config.systemMode == MODE_SETUP) || (config.systemMode == MODE_CLIENT && apMode);
+
+    // Reset client watchdog so viewing the UI prevents "No Clients" reboot
+    lastClientCheck = millis();
+
     if (apMode &&
         !webServer.hostHeader().equalsIgnoreCase(WiFi.softAPIP().toString()) &&
         !webServer.hostHeader().equalsIgnoreCase(deviceId + ".local")) {
@@ -974,28 +992,32 @@ void handleRoot() {
         return;
     }
 
-    if (!apMode && !webServer.authenticate(config.wwwUser, config.wwwPass))
+    if (!isSetupUI && !webServer.authenticate(config.wwwUser, config.wwwPass))
         return webServer.requestAuthentication();
 
-    String pageTitle = deviceId + (apMode ? " - ACP/Setup" : " - Client");
+    String pageTitle = deviceId + (isSetupUI ? " - Setup" : " - Dashboard");
     String h = "<html><head><title>" + pageTitle + "</title>"
                "<meta charset='UTF-8'><meta name='viewport' content='width=device-width'>"
-               + String(dashStyle) + ipScript + "</head><body><div class='container'>";
+               + String(dashStyle) + ipScript + modeScript + "</head><body><div class='container'>";
     h += "<h1>" + pageTitle + "</h1>";
 
-    if (apMode) {
-        h += "<div class='stat diag'>ACP MODE: " + WiFi.softAPIP().toString() + "<br>HEAP: " + String(ESP.getFreeHeap()) + " Bytes<br>LAST REBOOT: " + ESP.getResetReason() + "</div>";
+    if (isSetupUI) {
+        h += "<div class='stat diag'>SETUP/RECOVERY MODE<br>IP: " + WiFi.softAPIP().toString() + "</div>";
         h += "<a href='/scan' class='btn' style='margin-bottom:12px;'>SCAN WIFI NETWORKS</a>";
         h += "<form method='POST' action='/saveConfig'>"
+             + modeSelectHtml() +
+             "<div id='clientFields' style='display:" + String(config.systemMode == MODE_CLIENT ? "block" : "none") + "'>"
              "<input name='ssid' id='ssid' placeholder='WiFi SSID'>"
-             "<input name='pass' type='password' placeholder='WiFi Password'>";
-        h += "<hr style='border:1px solid #333;margin:20px 0;'><strong>NETWORK SETTINGS:</strong>" + ipFieldsHtml();
+             "<input name='pass' type='password' placeholder='WiFi Password'>"
+             "<hr style='border:1px solid #333;margin:20px 0;'><strong>CLIENT NETWORK SETTINGS:</strong>" + ipFieldsHtml() + 
+             "</div>";
         h += "<div style='margin-top:10px;'><strong>TCP SERVER PORT:</strong><input name='srv_port' type='number' placeholder='TCP Server Port (Default: 2001)' value='" + String(config.tcpServerPort) + "'></div>";
-        h += "<button class='btn' style='margin-top:10px;'>SAVE & CONNECT</button></form>";
+        h += "<button class='btn' style='margin-top:10px;'>SAVE & REBOOT</button></form>";
         h += "<a href='/update' class='btn' style='background:#004d40;color:#fff;'>FLASH FIRMWARE (OTA)</a>";
         h += "<form method='POST' action='/factReset' onsubmit=\"return confirm('ERASE ALL?')\"><button class='btn btn-red'>FACTORY RESET</button></form>";
     } else {
-        h += "<div class='stat'>LOCAL IP: " + WiFi.localIP().toString() + ":" + String(config.tcpServerPort) + "<br>STREAMS: " + String(activeClients) + " of " + String(MAX_TCP_CLIENTS) + " (MAX)</div>";
+        String ip = (config.systemMode == MODE_ACP) ? WiFi.softAPIP().toString() : WiFi.localIP().toString();
+        h += "<div class='stat'>IP: " + ip + ":" + String(config.tcpServerPort) + "<br>STREAMS: " + String(activeClients) + " of " + String(MAX_TCP_CLIENTS) + " (MAX)</div>";
         h += "<div class='stat diag'>UPTIME: " + formatUptime() + "<br>HEAP: " + String(ESP.getFreeHeap()) + " Bytes<br>SIGNAL: " + String(WiFi.RSSI()) + " dBm<br>LAST REBOOT: " + ESP.getResetReason() + "</div>";
         h += "<a class='btn' href='/live-data' style='background:#ffcc00;color:#000;'>VIEW LIVE DATA</a>";
         h += "<a class='btn btn-raw' href='/raw'>VIEW RAW P1 DATA</a>";
@@ -1024,10 +1046,6 @@ void setup() {
     Serial.println("  WATCHDOG : ENABLED");
 
     dsmr_parser_init(&dsmr_parser, &dsmr_data);
-    Serial.println("[PARSER] DSMR Parser V2 + CRC16 + PF support");
-    Serial.print("[PARSER] RAM: Parser="); Serial.print(sizeof(dsmr_parser_t));
-    Serial.print(" Data=");              Serial.print(sizeof(dsmr_data_t));
-    Serial.print(" Total=");             Serial.println(sizeof(dsmr_parser_t) + sizeof(dsmr_data_t));
 
     EEPROM.begin(512);
     ESP.wdtFeed();
@@ -1044,6 +1062,7 @@ void setup() {
         config.dataSourcePort   = 2001;
         strcpy(config.dataSourceHost, "");
         config.tcpServerPort    = 2001;
+        config.systemMode       = MODE_SETUP;
         EEPROM.write(0, MAGIC_KEY);
         EEPROM.put(1, config);
         EEPROM.commit();
@@ -1062,44 +1081,74 @@ void setup() {
     Serial.println("  PARSER   : DSMR V2 LINE-BUFFERED + CRC16 + PF");
     Serial.println("==============================================");
 
-    delay(1000);
+    delay(10);
 
     uint8_t mac[6]; WiFi.macAddress(mac); char devName[32];
-    sprintf(devName, "SMR-BRIDGE-%02X%02X%02X", mac[3], mac[4], mac[5]);
+    const char* prefix = "SMR-BRIDGE";
+    if (config.systemMode == MODE_SETUP)       prefix = "SMR-SETUP";
+    else if (config.systemMode == MODE_CLIENT) prefix = "SMR-CLT-BRIDGE";
+    else if (config.systemMode == MODE_ACP)    prefix = "SMR-ACP-BRIDGE";
+
+    sprintf(devName, "%s-%02X%02X%02X", prefix, mac[3], mac[4], mac[5]);
     deviceId = String(devName);
 
-    WiFi.mode(WIFI_STA);
     WiFi.hostname(deviceId);
     ESP.wdtFeed();
 
-    if (!config.dhcpMode) {
-        IPAddress _ip, _gw, _sn;
-        _ip.fromString(config.staticIP);
-        _gw.fromString(config.gateway);
-        _sn.fromString(config.subnet);
-        WiFi.config(_ip, _gw, _sn);
-        Serial.print("[NET] Static IP: "); Serial.println(config.staticIP);
-    }
-
-    WiFi.begin(config.wifiSsid, config.wifiPass);
-    int retry = 0;
-    while (WiFi.status() != WL_CONNECTED && retry < 15) {
-        delay(500); Serial.print("."); retry++; ESP.wdtFeed();
-    }
-
-    if (WiFi.status() != WL_CONNECTED) {
-        apMode = true;
-        WiFi.mode(WIFI_AP_STA);
-        WiFi.softAP(deviceId.c_str());
-        dnsServer.start(53, "*", WiFi.softAPIP());
-        Serial.println("\n[NET] ACP: " + deviceId);
+    if (config.systemMode == MODE_CLIENT) {
+        WiFi.mode(WIFI_STA);
+        if (!config.dhcpMode) {
+            IPAddress _ip, _gw, _sn;
+            _ip.fromString(config.staticIP);
+            _gw.fromString(config.gateway);
+            _sn.fromString(config.subnet);
+            WiFi.config(_ip, _gw, _sn);
+            Serial.print("[NET] Static IP: "); Serial.println(config.staticIP);
+        }
+        WiFi.begin(config.wifiSsid, config.wifiPass);
+        int retry = 0;
+        while (WiFi.status() != WL_CONNECTED && retry < 60) {
+            delay(500); Serial.print("."); retry++; ESP.wdtFeed();
+        }
     } else {
-        Serial.println("\n[NET] ONLINE: " + WiFi.localIP().toString());
-        MDNS.begin("smr");
-        bootTime          = millis();
-        lastDataReceived  = millis();
-        lastClientCheck   = millis();
-        lastWiFiCheck     = millis();
+        // Setup or ACP mode -> Force AP
+        apMode = true;
+    }
+
+    if (config.systemMode == MODE_CLIENT && WiFi.status() == WL_CONNECTED) {
+         Serial.println("\n[NET] ONLINE: " + WiFi.localIP().toString());
+         MDNS.begin("smr");
+         // Init operational timers
+         bootTime          = millis();
+         lastDataReceived  = bootTime;
+         lastClientCheck   = bootTime;
+         lastWiFiCheck     = bootTime;
+    } else {
+        // Fallback to AP (Client Failed, Setup, or ACP)
+        apMode = true;
+        WiFi.mode(config.systemMode == MODE_CLIENT ? WIFI_AP_STA : WIFI_AP);
+        
+        if (config.systemMode == MODE_CLIENT) {
+            // Use a distinct name so user knows it failed to connect
+            char fallbackName[32];
+            sprintf(fallbackName, "SMR-FALLBACK-%02X%02X%02X", mac[3], mac[4], mac[5]);
+            WiFi.softAP(fallbackName);
+        } else {
+            // Setup or ACP modes use their native names
+            WiFi.softAP(deviceId.c_str());
+        }
+        
+        dnsServer.start(53, "*", WiFi.softAPIP());
+        Serial.println("\n[NET] AP Mode: " + deviceId);
+        Serial.println("[NET] AP IP:   " + WiFi.softAPIP().toString());
+        
+        if (config.systemMode == MODE_ACP) {
+            // ACP is an operational mode
+            bootTime          = millis();
+            lastDataReceived  = bootTime;
+            lastClientCheck   = bootTime;
+            // WiFi check ignored in ACP
+        }
     }
 
     ESP.wdtFeed();
@@ -1171,12 +1220,15 @@ void setup() {
 
     webServer.on("/config/wifi", [](){
         if (!webServer.authenticate(config.wwwUser, config.wwwPass)) return webServer.requestAuthentication();
-        String h = "<html><head><title>WiFi & Network</title>" + String(dashStyle) + ipScript + "</head><body><div class='container'><h1>WIFI & NETWORK</h1>"
+        String h = "<html><head><title>WiFi & Network</title>" + String(dashStyle) + ipScript + modeScript + "</head><body><div class='container'><h1>WIFI & NETWORK</h1>"
                    "<a href='/scan' class='btn' style='margin-bottom:12px;'>SCAN WIFI NETWORKS</a>"
                    "<form method='POST' action='/saveConfig'>"
+                   + modeSelectHtml() +
+                   "<div id='clientFields' style='display:" + String(config.systemMode == MODE_CLIENT ? "block" : "none") + "'>"
                    "<input name='ssid' id='ssid' placeholder='WiFi SSID' value='" + String(config.wifiSsid) + "'>"
                    "<input name='pass' type='password' placeholder='WiFi Password'>"
-                   "<hr style='border:1px solid #333;margin:20px 0;'><strong>NETWORK SETTINGS:</strong>" + ipFieldsHtml() +
+                   "<hr style='border:1px solid #333;margin:20px 0;'><strong>CLIENT NETWORK SETTINGS:</strong>" + ipFieldsHtml() +
+                   "</div>"
                    "<div style='margin-top:10px;'><strong>TCP SERVER PORT:</strong>"
                    "<input name='srv_port' type='number' placeholder='Port (Default: 2001)' value='" + String(config.tcpServerPort) + "'></div>"
                    "<button class='btn'>SAVE SETTINGS</button></form>"
@@ -1223,6 +1275,7 @@ void setup() {
     // client mode without auth the worst case is a settings change + reboot,
     // which requires LAN access and knowledge of the endpoint.
     webServer.on("/saveConfig", HTTP_POST, [](){
+        config.systemMode = (uint8_t)webServer.arg("sys_mode").toInt();
         strncpy(config.wifiSsid, webServer.arg("ssid").c_str(), 32);
         strncpy(config.wifiPass, webServer.arg("pass").c_str(), 63);
         config.dhcpMode = (webServer.arg("dhcp") == "1");
@@ -1317,7 +1370,7 @@ void processDataByte(char c) {
     }
 
     // Add the current byte to our temporary buffer if there is space.
-    if (tempBufferIndex < MAX_FRAME_SIZE) {
+    if (tempBufferIndex < (MAX_FRAME_SIZE-1)) {
         tempBuffer[tempBufferIndex++] = c;
     }
 
@@ -1353,7 +1406,7 @@ void loop() {
     // back online later. The ESP8266 background process will connect automatically.
     // NOTE: WiFi.status() reflects the STATION interface (connection to Router).
     // It does not trigger if a user connects to our SoftAP.
-    if (apMode && WiFi.status() == WL_CONNECTED) {
+    if (config.systemMode == MODE_CLIENT && apMode && WiFi.status() == WL_CONNECTED) {
         Serial.println(F("\n[NET] Station connected to Uplink, transitioning from AP to Client mode."));
         apMode = false;
 
@@ -1372,7 +1425,7 @@ void loop() {
         bootTime          = millis();
         lastDataReceived  = bootTime;
         lastClientCheck   = lastDataReceived;
-        lastWiFiCheck     = lastClientCheck;
+        lastWiFiCheck     = lastClientCheck;      
     }
 
     if (apMode) dnsServer.processNextRequest();
@@ -1380,11 +1433,14 @@ void loop() {
     webServer.handleClient();
 
     // SOFTWARE WATCHDOG - client mode only
-    if (!apMode) {
+    // Run watchdog if we are operating (ACP Mode or Client Connected)
+    // In ACP mode, apMode is true, but we are operating.
+    if ((config.systemMode == MODE_ACP) || (!apMode)) {
         unsigned long now = millis();
         bool bootGracePassed = (now - bootTime) > BOOT_GRACE_PERIOD;
 
-        if (bootGracePassed && WiFi.status() != WL_CONNECTED) {
+        // WiFi Watchdog: Only for Client Mode
+        if (config.systemMode == MODE_CLIENT && bootGracePassed && WiFi.status() != WL_CONNECTED) {
             if (now - lastWiFiCheck > WIFI_TIMEOUT) {
                 Serial.println("\n[WATCHDOG] WiFi lost 5 min. Rebooting...");
                 delay(1000); ESP.restart();
@@ -1417,7 +1473,7 @@ void loop() {
     }
 
     // --- DATA SOURCE ---
-    if (config.useTcpDataSource && !apMode) {
+    if (config.useTcpDataSource && ((config.systemMode == MODE_ACP) || !apMode)) {
         if (!dataSourceClient.connected()) {
             static unsigned long lastTcpConnectAttempt = 0;
             if (millis() - lastTcpConnectAttempt > 5000) {
