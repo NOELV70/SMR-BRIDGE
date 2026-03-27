@@ -1,4 +1,4 @@
- /*******************************************************************************
+/*******************************************************************************
  * FILE:        SMR-Multi.ino
  * AUTHOR:      Noel Vellemans
  * VERSION:     6.2.0
@@ -195,7 +195,6 @@ typedef struct {
     uint8_t     obis_id;
 } obis_entry_t;
 
-// Table ends without null sentinel; length is computed at compile time.
 const obis_entry_t OBIS_TABLE[] PROGMEM = {
     {OBIS_METER_ID,           OBIS_ID_METER_ID},
     {OBIS_TIMESTAMP,          OBIS_ID_TIMESTAMP},
@@ -573,7 +572,7 @@ String dsmr_get_direction_l3(const dsmr_data_t *data) {
 // (pf_* widened from int16_t to int32_t). All devices will factory-reset
 // once on first boot of this version, which is intentional.
 // Incremented to 0x53 for System Mode support
-#define MAGIC_KEY         0x53
+#define MAGIC_KEY         0x54
 #define TCP_PORT          2001
 #define MAX_TCP_CLIENTS   10
 #define MAX_FRAME_SIZE    1500
@@ -585,6 +584,7 @@ String dsmr_get_direction_l3(const dsmr_data_t *data) {
 struct AppConfig {
     char     wifiSsid[33];
     char     wifiPass[64];
+    char     apPass[64];
     char     wwwUser[33];
     char     wwwPass[33];
     bool     dhcpMode;
@@ -669,6 +669,7 @@ const char* modeScript =
 " var m=document.getElementById('sys_mode').value;"
 " var isClient=(m=='1');"
 " document.getElementById('clientFields').style.display=isClient?'block':'none';"
+" document.getElementById('apFields').style.display=(m=='2')?'block':'none';"
 "}"
 "</script>";
 
@@ -731,6 +732,15 @@ String getPFColor(float pf) {
 //=============================================================================
 // LIVE PAGE HANDLER - Chunked transfer to avoid large heap String
 //=============================================================================
+
+// Enable runtime heap logging to Serial for quick before/after measurements.
+#define ENABLE_HEAP_LOG 1
+
+static inline void logHeap(const char *tag) {
+#if ENABLE_HEAP_LOG
+    Serial.printf("[HEAP] %s: %u bytes free\n", tag, (unsigned int)ESP.getFreeHeap());
+#endif
+}
 void handleLive() {
     if (!webServer.authenticate(config.wwwUser, config.wwwPass))
         return webServer.requestAuthentication();
@@ -747,6 +757,9 @@ void handleLive() {
 
     // Reset client watchdog so viewing the UI prevents "No Clients" reboot
     lastClientCheck = millis();
+
+    // Heap snapshot at handler entry
+    logHeap("handleLive:start");
 
     // ---- HEAD ----
     webServer.sendContent(F("<html><head><title>Live P1</title>"
@@ -975,6 +988,8 @@ void handleLive() {
     ));
     webServer.sendContent(getFooter());
     webServer.sendContent(F("</div></body></html>"));
+    // Heap snapshot before finishing handler
+    logHeap("handleLive:end");
     webServer.sendContent("");  // Terminate chunked encoding
 }
 
@@ -983,6 +998,9 @@ void handleRoot() {
 
     // Reset client watchdog so viewing the UI prevents "No Clients" reboot
     lastClientCheck = millis();
+
+    // Heap snapshot at entry
+    logHeap("handleRoot:start");
 
     if (apMode &&
         !webServer.hostHeader().equalsIgnoreCase(WiFi.softAPIP().toString()) &&
@@ -1028,7 +1046,11 @@ void handleRoot() {
          "if(p.has('s'))document.getElementById('ssid').value=decodeURIComponent(p.get('s'));"
          "</script></body></html>";
 
+    // Heap before sending the generated page
+    logHeap("handleRoot:before_send");
     webServer.send(200, "text/html", h);
+    // Heap after sending the generated page
+    logHeap("handleRoot:end");
 }
 
 void setup() {
@@ -1036,7 +1058,7 @@ void setup() {
     ESP.wdtFeed();
 
     Serial.begin(115200);
-    delay(100);
+    delay(10);
     ESP.wdtFeed();
 
     Serial.println("\r\n\n==============================================");
@@ -1061,6 +1083,7 @@ void setup() {
         config.useTcpDataSource = false;
         config.dataSourcePort   = 2001;
         strcpy(config.dataSourceHost, "");
+        strcpy(config.apPass, "");
         config.tcpServerPort    = 2001;
         config.systemMode       = MODE_SETUP;
         EEPROM.write(0, MAGIC_KEY);
@@ -1108,7 +1131,7 @@ void setup() {
         WiFi.begin(config.wifiSsid, config.wifiPass);
         int retry = 0;
         while (WiFi.status() != WL_CONNECTED && retry < 60) {
-            delay(500); Serial.print("."); retry++; ESP.wdtFeed();
+            delay(1000); Serial.print("."); retry++; ESP.wdtFeed();
         }
     } else {
         // Setup or ACP mode -> Force AP
@@ -1132,10 +1155,12 @@ void setup() {
             // Use a distinct name so user knows it failed to connect
             char fallbackName[32];
             sprintf(fallbackName, "SMR-FALLBACK-%02X%02X%02X", mac[3], mac[4], mac[5]);
-            WiFi.softAP(fallbackName);
+            if (strlen(config.apPass) >= 8) WiFi.softAP(fallbackName, config.apPass);
+            else WiFi.softAP(fallbackName);
         } else {
             // Setup or ACP modes use their native names
-            WiFi.softAP(deviceId.c_str());
+            if (strlen(config.apPass) >= 8) WiFi.softAP(deviceId.c_str(), config.apPass);
+            else WiFi.softAP(deviceId.c_str());
         }
         
         dnsServer.start(53, "*", WiFi.softAPIP());
@@ -1160,6 +1185,9 @@ void setup() {
     webServer.on("/generate_204", handleRoot);
 
     webServer.on("/scan", [](){
+        // Heap snapshot for scan handler
+        logHeap("scan:start");
+
         String h = "<html><head><title>WiFi Scan</title>" + String(dashStyle) + "</head>"
                    "<body><div class='container'><h1>WIFI SCAN</h1>"
                    "<div class='stat diag' style='text-align:center;'>Scanning, please wait...</div>"
@@ -1170,6 +1198,9 @@ void setup() {
     });
 
     webServer.on("/scanresults", [](){
+        // Heap snapshot for scan results handler
+        logHeap("scanresults:start");
+
         int n = WiFi.scanNetworks();
         String h = "<html><head><title>WiFi Scan Results</title>" + String(dashStyle) + "</head><body><div class='container'><h1>WIFI SCAN RESULTS</h1>";
         if (n == 0) {
@@ -1195,6 +1226,9 @@ void setup() {
 
     webServer.on("/raw", [](){
         if (!webServer.authenticate(config.wwwUser, config.wwwPass)) return webServer.requestAuthentication();
+        // Heap snapshot for raw page
+        logHeap("raw:start");
+
         String h = "<html><head><title>RAW P1 Data</title><meta charset='UTF-8'>"
                    "<meta http-equiv='refresh' content='5'><meta name='viewport' content='width=device-width'>"
                    + String(dashStyle) + "</head><body><div class='container'><h1>RAW P1 DATA</h1>"
@@ -1208,39 +1242,54 @@ void setup() {
 
     webServer.on("/settings", [](){
         if (!webServer.authenticate(config.wwwUser, config.wwwPass)) return webServer.requestAuthentication();
+        // Heap snapshot for settings page
+        logHeap("settings:start");
+
         String h = "<html><head><title>Settings</title>" + String(dashStyle) + "</head><body><div class='container'><h1>SETTINGS</h1>"
                    "<a href='/config/wifi' class='btn'>WIFI & NETWORK</a>"
                    "<a href='/config/auth' class='btn'>ADMIN SECURITY</a>"
                    "<a href='/config/source' class='btn' style='background:#2E8B57;color:#fff;'>DATA SOURCE</a>"
                    "<a href='/update' class='btn' style='background:#004d40;color:#fff;'>FLASH FIRMWARE (OTA)</a>"
                    "<form method='POST' action='/factReset' onsubmit=\"return confirm('Reset Everything?')\"><button class='btn btn-red'>FACTORY RESET</button></form>"
+                   "<form method='POST' action='/reboot' onsubmit=\"return confirm('Reboot device?')\"><button class='btn' style='margin-top:8px;background:#ff5722;color:#fff;'>REBOOT</button></form>"
                    "<a href='/' class='btn' style='background:#333;color:#fff;'>BACK</a>" + getFooter() + "</div></body></html>";
         webServer.send(200, "text/html", h);
     });
 
     webServer.on("/config/wifi", [](){
-        if (!webServer.authenticate(config.wwwUser, config.wwwPass)) return webServer.requestAuthentication();
+        bool isSetupUI = (config.systemMode == MODE_SETUP) || (config.systemMode == MODE_CLIENT && apMode);
+        if (!isSetupUI && !webServer.authenticate(config.wwwUser, config.wwwPass)) return webServer.requestAuthentication();
+        // Heap snapshot for config wifi page
+        logHeap("config_wifi:start");
+
         String h = "<html><head><title>WiFi & Network</title>" + String(dashStyle) + ipScript + modeScript + "</head><body><div class='container'><h1>WIFI & NETWORK</h1>"
                    "<a href='/scan' class='btn' style='margin-bottom:12px;'>SCAN WIFI NETWORKS</a>"
                    "<form method='POST' action='/saveConfig'>"
                    + modeSelectHtml() +
+                   "<div id='apFields' style='display:" + String(config.systemMode == MODE_ACP ? "block" : "none") + "'>"
+                   "<hr style='border:1px solid #333;margin:12px 0;'><strong>ACCESS POINT (AP) SETTINGS:</strong>"
+                   "<input name='ap_pass' type='password' placeholder='AP Password (optional, min 8)' value='" + String(config.apPass) + "'>"
+                   "</div>"
                    "<div id='clientFields' style='display:" + String(config.systemMode == MODE_CLIENT ? "block" : "none") + "'>"
                    "<input name='ssid' id='ssid' placeholder='WiFi SSID' value='" + String(config.wifiSsid) + "'>"
-                   "<input name='pass' type='password' placeholder='WiFi Password'>"
-                   "<hr style='border:1px solid #333;margin:20px 0;'><strong>CLIENT NETWORK SETTINGS:</strong>" + ipFieldsHtml() +
-                   "</div>"
-                   "<div style='margin-top:10px;'><strong>TCP SERVER PORT:</strong>"
-                   "<input name='srv_port' type='number' placeholder='Port (Default: 2001)' value='" + String(config.tcpServerPort) + "'></div>"
-                   "<button class='btn'>SAVE SETTINGS</button></form>"
-                   "<a href='/settings' class='btn' style='background:#333;color:#fff;'>BACK</a>" + getFooter() + "</div>" +
-                   "<script>var p=new URLSearchParams(window.location.search);"
-                   "if(p.has('s'))document.getElementById('ssid').value=decodeURIComponent(p.get('s'));</script>"
-                   "</body></html>";
+                   "<input name='pass' type='password' placeholder='WiFi Password'>";
+        h += "<hr style='border:1px solid #333;margin:20px 0;'><strong>CLIENT NETWORK SETTINGS:</strong>" + ipFieldsHtml();
+        h += "</div>";
+        h += "<div style='margin-top:10px;'><strong>TCP SERVER PORT:</strong>";
+        h += "<input name='srv_port' type='number' placeholder='Port (Default: 2001)' value='" + String(config.tcpServerPort) + "'></div>";
+        h += "<button class='btn'>SAVE SETTINGS</button></form>";
+        h += "<a href='/settings' class='btn' style='background:#333;color:#fff;'>BACK</a>" + getFooter() + "</div>";
+        h += "<script>var p=new URLSearchParams(window.location.search);";
+        h += "if(p.has('s'))document.getElementById('ssid').value=decodeURIComponent(p.get('s'));</script>";
+        h += "</body></html>";
         webServer.send(200, "text/html", h);
     });
 
     webServer.on("/config/auth", [](){
         if (!webServer.authenticate(config.wwwUser, config.wwwPass)) return webServer.requestAuthentication();
+        // Heap snapshot for config auth page
+        logHeap("config_auth:start");
+
         String h = "<html><head><title>Admin Security</title>" + String(dashStyle) + "</head><body><div class='container'><h1>ADMIN SECURITY</h1>"
                    "<form method='POST' action='/savePass'>"
                    "<input name='user' placeholder='Username' value='" + String(config.wwwUser) + "'>"
@@ -1252,6 +1301,9 @@ void setup() {
 
     webServer.on("/config/source", [](){
         if (!webServer.authenticate(config.wwwUser, config.wwwPass)) return webServer.requestAuthentication();
+        // Heap snapshot for config source page
+        logHeap("config_source:start");
+
         String h = "<html><head><title>Data Source</title>" + String(dashStyle);
         h += "<script>function toggleSource(){var d=document.getElementById('source_mode').value=='1';"
              "document.getElementById('tcpSourceFields').style.display=d?'block':'none';}</script>";
@@ -1278,6 +1330,7 @@ void setup() {
         config.systemMode = (uint8_t)webServer.arg("sys_mode").toInt();
         strncpy(config.wifiSsid, webServer.arg("ssid").c_str(), 32);
         strncpy(config.wifiPass, webServer.arg("pass").c_str(), 63);
+        strncpy(config.apPass, webServer.arg("ap_pass").c_str(), 63);
         config.dhcpMode = (webServer.arg("dhcp") == "1");
         strncpy(config.staticIP, webServer.arg("ip").c_str(), 15);
         strncpy(config.gateway,  webServer.arg("gw").c_str(), 15);
@@ -1311,6 +1364,13 @@ void setup() {
     webServer.on("/factReset", HTTP_POST, [](){
         for (int i = 0; i < 512; i++) EEPROM.write(i, 0);
         EEPROM.commit(); ESP.restart();
+    });
+
+    webServer.on("/reboot", HTTP_POST, [](){
+        if (!webServer.authenticate(config.wwwUser, config.wwwPass)) return webServer.requestAuthentication();
+        webServer.send(200, "text/plain", "Rebooting...");
+        delay(100);
+        ESP.restart();
     });
 
     webServer.on("/update", HTTP_GET, [](){
