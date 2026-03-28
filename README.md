@@ -6,7 +6,7 @@ Ultra-Minimal Smart Meter Gateway — Engineered for Reliability
 
 SMR-Bridge is a featured open-source firmware project delivering a high-reliability DSMR (P1) serial-to-TCP gateway using the simplest hardware configuration possible.
 
-The firmware is intentionally engineered around the ESP8266 — not as a legacy choice, but as a deliberate design decision driven by strict power budgets, electrical simplicity, and long-term operational stability.
+The firmware is intentionally engineered around the **ESP8266** — not as a legacy choice, but as a deliberate design decision driven by strict power budgets, electrical simplicity, and long-term operational stability.
 
 **Why This Project Exists**
 
@@ -28,6 +28,14 @@ It demonstrates that a single ESP8266, correctly configured at the register leve
 
 —all while remaining fully electrically compliant with the smart meter itself.
 
+### 🚀 Latest Additions
+
+- **mDNS Support:** Access the dashboard via `http://smr-bridge.local` without hunting for IP addresses.
+- **Enhanced Hardware Watchdog:** Integrated register-level watchdog for 8-second hard recovery.
+- **Advanced Serial Inversion:** Native bit-level inversion for DSMR signals (no 74LS04/transistor needed).
+- **Session Management:** Support for up to 10 concurrent TCP streams for parallel logging.
+- **Extended Diagnostics:** Real-time visibility into signal quality and heap fragmentation.
+
 **Minimal Hardware — By Design**
 ✔ Runs on the Simplest Possible Hardware
 
@@ -44,6 +52,18 @@ This eliminates:
   Additional and avoidable failure points
 
 <img width="508" height="677" alt="ESP8266 minimal wiring" src="https://github.com/user-attachments/assets/e07f7834-ab3e-4637-a4a8-591bd588fd95" />
+
+**The "One Resistor" Secret**
+To keep the Smart Meter (P1) port active, the **Data Request (RTS)** pin must be held high. SMR-Bridge utilizes a single pull-up resistor (typically 1kΩ - 10kΩ) between the 5V/VCC line and the Request pin to ensure the meter streams data continuously.
+
+**Technical Specifications**
+| Feature | Specification |
+| :--- | :--- |
+| **Serial Configuration** | 115200 Baud, 8N1 (Standard DSMR 4.0/5.0) |
+| **Inversion** | Software-defined UART RX Inversion |
+| **TCP Port** | 2001 (Transparent Stream) |
+| **Power Consumption** | ~70mA - 85mA (Meter-safe) |
+| **mDNS Hostname** | `smr-bridge.local` |
 
 **Powered Directly from the Smart Meter**
 
@@ -168,6 +188,12 @@ Custom TCP-based parsers and loggers
 **Design Philosophy**
 
 Less hardware = fewer failure modes
+
+**Stability First:**
+- **Hardware Watchdog:** 8-second hard reset on CPU hang.
+- **Serial Watchdog:** Auto-reboot if no DSMR data is detected for 5 minutes.
+- **Wi-Fi Watchdog:** Automatic reconnection and fallback to AP mode if the network is lost.
+
 Electrical compliance over raw performance
 Stability over feature bloat
 Field reliability over theoretical throughput
