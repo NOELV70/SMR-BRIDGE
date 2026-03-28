@@ -612,6 +612,31 @@ uint16_t    tempBufferIndex = 0;
 bool        tempOverflowed  = false;
 bool        frameEndDetected = false;
 int         activeClients   = 0;
+char        broadcastBuf[512];
+uint16_t    broadcastLen    = 0;
+unsigned long lastBroadcastByteTime = 0;
+
+/**
+ * Flushes the accumulated broadcast buffer to all connected TCP clients.
+ * This significantly reduces the overhead compared to byte-by-byte sending.
+ */
+void flushBroadcast() {
+    if (broadcastLen == 0) return;
+    for (int i = 0; i < MAX_TCP_CLIENTS; i++) {
+        if (TCPClient[i].connected()) {
+            // Only drop the client if the buffer is completely backed up (0 bytes).
+            // If there is any space, write() will block slightly but won't hang the system
+            // unless the connection is truly dead.
+            if (TCPClient[i].availableForWrite() > 0) {
+                TCPClient[i].write((const uint8_t*)broadcastBuf, broadcastLen);
+            } else {
+                Serial.printf("[TCP] Client %d totally congested, dropping.\n", i);
+                TCPClient[i].stop();
+            }
+        }
+    }
+    broadcastLen = 0;
+}
 
 // DSMR Parser instances
 dsmr_data_t  dsmr_data;
@@ -1092,6 +1117,10 @@ void setup() {
     } else {
         EEPROM.get(1, config);
     }
+    
+    // Set a short timeout for TCP operations to prevent 5+ second hangs 
+    // during network hiccups.
+    dataSourceClient.setTimeout(1000);
 
     if (config.tcpServerPort == 0) config.tcpServerPort = 2001;
 
@@ -1410,9 +1439,18 @@ void processDataByte(char c) {
         dsmr_parser_init(&dsmr_parser, &dsmr_data);
     }
 
-    // Forward to all connected TCP clients
-    for (int i = 0; i < MAX_TCP_CLIENTS; i++) {
-        if (TCPClient[i].connected()) TCPClient[i].write(c);
+    // 1. Buffer Full / Delimiter Logic
+    // Ensure we don't overflow the buffer. If full, flush before adding.
+    if (broadcastLen >= sizeof(broadcastBuf)) {
+        flushBroadcast();
+    }
+    
+    broadcastBuf[broadcastLen++] = c;
+    lastBroadcastByteTime = millis();
+
+    // If we reached the end of the telegram ('!'), flush immediately for low latency.
+    if (c == '!') {
+        flushBroadcast();
     }
 
     // A '/' always marks the start of a new, clean frame. Reset raw buffer.
@@ -1492,6 +1530,13 @@ void loop() {
     MDNS.update();
     webServer.handleClient();
 
+    // 2. Idle Timeout Logic
+    // If data is sitting in the buffer but no new data has arrived for 100ms, flush it.
+    if (broadcastLen > 0 && (millis() - lastBroadcastByteTime > 100)) {
+        Serial.printf("[TCP] Idle flush (%d bytes)\n", broadcastLen);
+        flushBroadcast();
+    }
+
     // SOFTWARE WATCHDOG - client mode only
     // Run watchdog if we are operating (ACP Mode or Client Connected)
     // In ACP mode, apMode is true, but we are operating.
@@ -1525,6 +1570,10 @@ void loop() {
     // Accept new TCP clients
     if (tcpServer.hasClient()) {
         WiFiClient newClient = tcpServer.accept();
+        
+        // Disable Nagle's algorithm to ensure bytes are sent immediately 
+        // and don't contribute to buffer pressure unnecessarily.
+        newClient.setNoDelay(true);
         for (int i = 0; i < MAX_TCP_CLIENTS; i++) {
             if (!TCPClient[i] || !TCPClient[i].connected()) {
                 TCPClient[i] = newClient; break;
@@ -1540,6 +1589,7 @@ void loop() {
                 lastTcpConnectAttempt = millis();
                 Serial.printf("[TCP-SRC] Connecting to %s:%u...\n", config.dataSourceHost, config.dataSourcePort);
                 if (dataSourceClient.connect(config.dataSourceHost, config.dataSourcePort)) {
+                    dataSourceClient.setNoDelay(true);
                     Serial.println("[TCP-SRC] Connection established. Waiting for start of next data frame ('/')...");
                 } else {
                     // "Connecting..." message is sufficient, no need to log "Failed" every 5 seconds.
@@ -1548,10 +1598,18 @@ void loop() {
         }
         // Only process data if we are actually connected.
         if (dataSourceClient.connected()) {
-            while (dataSourceClient.available()) processDataByte(dataSourceClient.read());
+            int limit = 512; // Process max bytes per loop to keep UI responsive
+            while (dataSourceClient.available() && limit-- > 0) {
+                processDataByte(dataSourceClient.read());
+                if (limit % 64 == 0) yield(); // Give the WiFi stack time to breathe
+            }
         }
     } else {
-        while (Serial.available()) processDataByte(Serial.read());
+        int limit = 512;
+        while (Serial.available() && limit-- > 0) {
+            processDataByte(Serial.read());
+            if (limit % 64 == 0) yield();
+        }
     }
 
     // Count active TCP streaming clients
