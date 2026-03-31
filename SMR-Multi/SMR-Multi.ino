@@ -41,6 +41,11 @@
  * - Auth: HTTP Digest authentication for all administrative actions.
  * - OTA: Support for both Arduino IDE and Web-browser firmware updates.
  * 
+ * 6. MARSTEK EMULATION:
+ * High-fidelity Shelly Pro 3EM emulation layer for native integration with 
+ * Marstek B2500, Venus, and Jupiter battery storage systems. Skips the 
+ * requirement for the Marstek P1 meter.
+ * 
  * -----------------------------------------------------------------------------
  * CORE RELIABILITY: THE DUAL-WATCHDOG
  * 
@@ -93,6 +98,15 @@
 #include <DNSServer.h>
 #include <Updater.h>
 #include <EEPROM.h>
+#include <WiFiUdp.h>
+#include <ArduinoJson.h>
+
+// --- Forward Declarations for Shelly Emulator ---
+// These must be at the top so the compiler recognizes the functions
+// even if the header is included later in the file.
+void setupShellyEmulator();
+void loopShellyEmulator();
+void handleShellyStatus();
 
 //=============================================================================
 // DSMR PARSER V2 - INTEGRATED WITH POWER FACTOR
@@ -572,10 +586,11 @@ String dsmr_get_direction_l3(const dsmr_data_t *data) {
 // (pf_* widened from int16_t to int32_t). All devices will factory-reset
 // once on first boot of this version, which is intentional.
 // Incremented to 0x53 for System Mode support
-#define MAGIC_KEY         0x54
+#define MAGIC_KEY         0x57
 #define TCP_PORT          2001
 #define MAX_TCP_CLIENTS   10
 #define MAX_FRAME_SIZE    1500
+#define SHELLY_UDP_PORT   5683
 
 #define MODE_SETUP  0
 #define MODE_CLIENT 1
@@ -595,7 +610,9 @@ struct AppConfig {
     char     dataSourceHost[64];
     uint16_t dataSourcePort;
     uint16_t tcpServerPort;
+    uint16_t marstekPort;
     uint8_t  systemMode;
+    bool     emuEnabled;
 };
 
 AppConfig   config;
@@ -753,6 +770,9 @@ String getPFColor(float pf) {
     if (a >= 0.85f) return "#ffaa00";
     return "#ff3300";
 }
+
+// Include the emulator here so it has access to the types and variables defined above
+#include "ShellyEmulator.h"
 
 //=============================================================================
 // LIVE PAGE HANDLER - Chunked transfer to avoid large heap String
@@ -1110,6 +1130,8 @@ void setup() {
         strcpy(config.dataSourceHost, "");
         strcpy(config.apPass, "");
         config.tcpServerPort    = 2001;
+        config.marstekPort      = 2220; // 1010 for legacy Marstek, 2220 for modern firmware
+        config.emuEnabled       = true;
         config.systemMode       = MODE_SETUP;
         EEPROM.write(0, MAGIC_KEY);
         EEPROM.put(1, config);
@@ -1276,6 +1298,7 @@ void setup() {
 
         String h = "<html><head><title>Settings</title>" + String(dashStyle) + "</head><body><div class='container'><h1>SETTINGS</h1>"
                    "<a href='/config/wifi' class='btn'>WIFI & NETWORK</a>"
+                   "<a href='/config/emu' class='btn' style='background:#6a1b9a;color:#fff;'>EMULATION MODES</a>"
                    "<a href='/config/auth' class='btn'>ADMIN SECURITY</a>"
                    "<a href='/config/source' class='btn' style='background:#2E8B57;color:#fff;'>DATA SOURCE</a>"
                    "<a href='/update' class='btn' style='background:#004d40;color:#fff;'>FLASH FIRMWARE (OTA)</a>"
@@ -1390,6 +1413,35 @@ void setup() {
         delay(1000); ESP.restart();
     });
 
+    webServer.on("/config/emu", [](){
+        if (!webServer.authenticate(config.wwwUser, config.wwwPass)) return webServer.requestAuthentication();
+        logHeap("config_emu:start");
+
+        String h = "<html><head><title>Emulation Modes</title>" + String(dashStyle) + "</head><body><div class='container'><h1>EMULATION MODES</h1>"
+                   "<div class='stat diag'>Configure third-party device emulation (e.g. Marstek/Zendure/Shelly).</div>"
+                   "<form method='POST' action='/saveEmu'>"
+                   "<div><label style='display:flex;align-items:center;justify-content:center;'>"
+                   "<input type='checkbox' name='emu_on' value='1' style='width:auto;margin-right:10px;'" + String(config.emuEnabled ? "checked" : "") + ">Enable Shelly/Marstek/Zendure Emulation</label></div>"
+                   "<div style='margin-top:20px;'><strong>EMULATOR PORT:</strong>"
+                   "<input name='emu_port' type='number' placeholder='Port (Default: 2220)' value='" + String(config.marstekPort) + "'></div>"
+                   "<div style='font-size:0.8em;color:#888;margin-bottom:20px; text-align:left;'>"
+                   "&bull; Port 2220: Modern Marstek & Zendure (Shelly Pro 3EM Gen2)<br>"
+                   "&bull; Port 1010: Legacy Marstek (Shelly 3EM Gen1)</div>"
+                   "<button class='btn'>SAVE & REBOOT</button></form>"
+                   "<a href='/settings' class='btn' style='background:#333;color:#fff;'>BACK</a>" + getFooter() + "</div></body></html>";
+        webServer.send(200, "text/html", h);
+    });
+
+    webServer.on("/saveEmu", HTTP_POST, [](){
+        if (!webServer.authenticate(config.wwwUser, config.wwwPass)) return webServer.requestAuthentication();
+        config.emuEnabled = (webServer.arg("emu_on") == "1");
+        config.marstekPort = (uint16_t)webServer.arg("emu_port").toInt();
+        if (config.marstekPort == 0) config.marstekPort = 2220;
+        EEPROM.put(1, config); EEPROM.commit();
+        webServer.send(200, "text/plain", "Emulation settings saved. Rebooting...");
+        delay(1000); ESP.restart();
+    });
+
     webServer.on("/factReset", HTTP_POST, [](){
         for (int i = 0; i < 512; i++) EEPROM.write(i, 0);
         EEPROM.commit(); ESP.restart();
@@ -1422,6 +1474,10 @@ void setup() {
 
     webServer.onNotFound(handleRoot);
     webServer.begin();
+
+    // Initialize the Shelly/Marstek Emulator
+    if (config.emuEnabled) setupShellyEmulator();
+
     tcpServer.begin(config.tcpServerPort);
 }
 
@@ -1529,6 +1585,7 @@ void loop() {
     if (apMode) dnsServer.processNextRequest();
     MDNS.update();
     webServer.handleClient();
+    if (config.emuEnabled) loopShellyEmulator();
 
     // 2. Idle Timeout Logic
     // If data is sitting in the buffer but no new data has arrived for 100ms, flush it.
