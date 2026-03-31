@@ -19,18 +19,34 @@ Many smart-meter gateways are over-engineered:
 
 SMR-Bridge takes the opposite approach.
 
-It demonstrates that a single ESP8266, correctly configured at the register level, is sufficient to deliver:
-
-  Stable DSMR data acquisition
-  Multi-client network distribution
-  Secure device management
-  24/7 unattended operation
+It demonstrates that a single ESP8266, correctly configured at the register level, is sufficient to deliver stable DSMR data acquisition, multi-client network distribution, and professional-grade ecosystem emulation for 24/7 unattended operation.
 
 —all while remaining fully electrically compliant with the smart meter itself.
 
+### 🔋 Plug-in Battery & Storage Integration
+
+SMR-Bridge includes a specialized **Universal Emulation Layer** designed to act as a transparent surrogate for proprietary energy meters. It enables native, local integration with leading "Plug-in" battery ecosystems, eliminating the need for expensive vendor-specific P1 meters or CT-clamp monitors.
+
+*   **Supported Ecosystems:** 
+    *   **Marstek:** B2500, Venus, Jupiter.
+    *   **Zendure:** SolarFlow, Hub 1200/2000.
+*   **Virtual Metering:** Mimics both **Shelly 3EM (Gen1)** and **Shelly Pro 3EM (Gen2)** API surfaces.
+*   **Zero-Latency Control:** Implements internal JSON caching. HTTP `/status` requests are served in **<1ms**, ensuring the battery's "Zero Export" control loop remains tight and responsive.
+*   **Bidirectional Flow:** Correctly maps DSMR signed power vectors, allowing battery systems to detect grid injection (Solar export) and trigger charging automatically.
+
+### 🔍 Smart Auto-Detection Options
+
+The firmware implements a "Zero-Touch" provisioning strategy for third-party storage systems:
+
+1.  **CoAP Discovery (UDP 5683):** Implements the Shelly-standard CoAP broadcast handshake. When a Marstek or Zendure system scans the network, SMR-Bridge responds with the correct identity (type `SHPR-3EM`), allowing it to be added instantly via the vendor's mobile app.
+2.  **mDNS Advertisement (RFC 6762):** Advertises the `_shelly._tcp` service. This ensures the device is visible to network scanners and automation hubs without needing a static IP or manual configuration.
+3.  **Configurable Service Ports:** Support for both Port **1010** (Legacy Marstek) and Port **2220** (Modern Marstek/Zendure) via a dedicated Emulation UI.
+
 ### 🚀 Latest Additions
 
-- **mDNS Support:** Access the dashboard via `http://smr-bridge.local` without hunting for IP addresses.
+ - **Universal Emulation:** Native Marstek & Zendure support via high-fidelity Shelly API mimicry.
+ - **JSON Caching Engine:** Optimized HTTP stack for near-instantaneous response times (<1ms).
+ - **mDNS Support:** Access the dashboard via `http://smr-bridge.local`.
 - **Enhanced Hardware Watchdog:** Integrated register-level watchdog for 8-second hard recovery.
 - **Advanced Serial Inversion:** Native bit-level inversion for DSMR signals (no 74LS04/transistor needed).
 - **Session Management:** Support for up to 10 concurrent TCP streams for parallel logging.
@@ -62,7 +78,7 @@ To keep the Smart Meter (P1) port active, the **Data Request (RTS)** pin must be
 | **Serial Configuration** | 115200 Baud, 8N1 (Standard DSMR 4.0/5.0) |
 | **Inversion** | Software-defined UART RX Inversion |
 | **TCP Port** | 2001 (Transparent Stream) |
-| **Power Consumption** | ~70mA - 85mA (Meter-safe) |
+| **Emulation Ports** | 2220 (Modern) / 1010 (Legacy) |
 | **mDNS Hostname** | `smr-bridge.local` |
 
 **Powered Directly from the Smart Meter**
