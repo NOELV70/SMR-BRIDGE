@@ -55,11 +55,11 @@ extern AppConfig   config;
 extern String      deviceId;
 
 // Internal instances for the emulator
-static ESP8266WebServer* shellyServer = nullptr;
-static WiFiUDP           shellyUdp;
-static bool              emuRunning   = false;
-static String            cachedShellyJson;
-static char              lastCachedTimestamp[14] = {0};
+ESP8266WebServer* shellyServer = nullptr;
+WiFiUDP           shellyUdp;
+bool              emuRunning   = false;
+String            cachedShellyJson;
+char              lastCachedTimestamp[14] = {0};
 
 /**
  * Pre-calculates the Shelly-compatible JSON payload.

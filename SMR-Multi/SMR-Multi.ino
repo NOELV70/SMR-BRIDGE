@@ -680,6 +680,21 @@ String customUrlEncode(String str) {
     return out;
 }
 
+String htmlEscape(const String& str) {
+    String out;
+    out.reserve(str.length() + 16);
+    for (unsigned int i = 0; i < str.length(); i++) {
+        char c = str.charAt(i);
+        if      (c == '&')  out += "&amp;";
+        else if (c == '<')  out += "&lt;";
+        else if (c == '>')  out += "&gt;";
+        else if (c == '"')  out += "&quot;";
+        else if (c == '\'') out += "&#39;";
+        else                out += c;
+    }
+    return out;
+}
+
 const char* dashStyle =
 "<style>"
 "body{background:#0c0c0c;color:#eee;font-family:'Segoe UI',sans-serif;text-align:center;padding:20px;}"
@@ -821,9 +836,9 @@ void handleLive() {
         webServer.sendContent(buf);
     }
 
+    float net = dsmr_get_current_power(&dsmr_last_good);
     // ---- CURRENT NET POWER ----
     {
-        float net   = dsmr_get_current_power(&dsmr_last_good);
         const char *col   = (net >= 0) ? "#ffcc00" : "#00ffcc";
         const char *label = (net >= 0) ? "CONSUMPTION: " : "INJECTION: ";
         snprintf(buf, sizeof(buf),
@@ -844,7 +859,6 @@ void handleLive() {
     }
 
     // Pre-calculate all phase values once
-    float net = dsmr_get_current_power(&dsmr_last_good);
     float p1  = dsmr_get_net_power_l1(&dsmr_last_good);
     float p2  = dsmr_get_net_power_l2(&dsmr_last_good);
     float p3  = dsmr_get_net_power_l3(&dsmr_last_good);
@@ -1263,7 +1277,7 @@ void setup() {
                 String ca = apMode
                     ? "location='/?s="           + customUrlEncode(WiFi.SSID(i)) + "'"
                     : "location='/config/wifi?s=" + customUrlEncode(WiFi.SSID(i)) + "'";
-                h += "<div class='net-item' onclick=\"" + ca + "\"><strong>" + WiFi.SSID(i) + "</strong><br><small>Signal: " + String(WiFi.RSSI(i)) + "dBm</small></div>";
+                h += "<div class='net-item' onclick=\"" + ca + "\"><strong>" + htmlEscape(WiFi.SSID(i)) + "</strong><br><small>Signal: " + String(WiFi.RSSI(i)) + "dBm</small></div>";
             }
             h += "<a href='/scan' class='btn' style='margin-top:20px;'>SCAN AGAIN</a>";
         } else {
@@ -1320,10 +1334,10 @@ void setup() {
                    + modeSelectHtml() +
                    "<div id='apFields' style='display:" + String(config.systemMode == MODE_ACP ? "block" : "none") + "'>"
                    "<hr style='border:1px solid #333;margin:12px 0;'><strong>ACCESS POINT (AP) SETTINGS:</strong>"
-                   "<input name='ap_pass' type='password' placeholder='AP Password (optional, min 8)' value='" + String(config.apPass) + "'>"
+                   "<input name='ap_pass' type='password' placeholder='AP Password (optional, min 8)' value='" + htmlEscape(config.apPass) + "'>"
                    "</div>"
                    "<div id='clientFields' style='display:" + String(config.systemMode == MODE_CLIENT ? "block" : "none") + "'>"
-                   "<input name='ssid' id='ssid' placeholder='WiFi SSID' value='" + String(config.wifiSsid) + "'>"
+                   "<input name='ssid' id='ssid' placeholder='WiFi SSID' value='" + htmlEscape(config.wifiSsid) + "'>"
                    "<input name='pass' type='password' placeholder='WiFi Password'>";
         h += "<hr style='border:1px solid #333;margin:20px 0;'><strong>CLIENT NETWORK SETTINGS:</strong>" + ipFieldsHtml();
         h += "</div>";
@@ -1344,7 +1358,7 @@ void setup() {
 
         String h = "<html><head><title>Admin Security</title>" + String(dashStyle) + "</head><body><div class='container'><h1>ADMIN SECURITY</h1>"
                    "<form method='POST' action='/savePass'>"
-                   "<input name='user' placeholder='Username' value='" + String(config.wwwUser) + "'>"
+                   "<input name='user' placeholder='Username' value='" + htmlEscape(config.wwwUser) + "'>"
                    "<input name='pass' type='password' placeholder='New Password'>"
                    "<button class='btn'>UPDATE CREDENTIALS</button></form>"
                    "<a href='/settings' class='btn' style='background:#333;color:#fff;'>BACK</a>" + getFooter() + "</div></body></html>";
@@ -1367,7 +1381,7 @@ void setup() {
              "<option value='0' " + String(!config.useTcpDataSource ? "selected" : "") + ">Local Serial (P1 Port)</option>"
              "<option value='1' " + String(config.useTcpDataSource  ? "selected" : "") + ">Remote TCP Stream</option></select>"
              "<div id='tcpSourceFields' style='display:" + String(config.useTcpDataSource ? "block" : "none") + "'>"
-             "<input name='host' placeholder='Remote Host or IP' value='" + String(config.dataSourceHost) + "'>"
+             "<input name='host' placeholder='Remote Host or IP' value='" + htmlEscape(config.dataSourceHost) + "'>"
              "<input name='port' type='number' placeholder='Port' value='" + String(config.dataSourcePort) + "'></div>"
              "<button class='btn'>SAVE & REBOOT</button></form>"
              "<a href='/settings' class='btn' style='background:#333;color:#fff;'>BACK</a>" + getFooter() + "</div></body></html>";
@@ -1443,6 +1457,7 @@ void setup() {
     });
 
     webServer.on("/factReset", HTTP_POST, [](){
+        if (!webServer.authenticate(config.wwwUser, config.wwwPass)) return webServer.requestAuthentication();
         for (int i = 0; i < 512; i++) EEPROM.write(i, 0);
         EEPROM.commit(); ESP.restart();
     });
@@ -1455,6 +1470,7 @@ void setup() {
     });
 
     webServer.on("/update", HTTP_GET, [](){
+        if (!webServer.authenticate(config.wwwUser, config.wwwPass)) return webServer.requestAuthentication();
         webServer.send(200, "text/html",
             "<html><head>" + String(dashStyle) + "</head><body><div class='container'><h1>UPDATE</h1>"
             "<form method='POST' action='/update' enctype='multipart/form-data'>"
@@ -1463,8 +1479,12 @@ void setup() {
     });
 
     webServer.on("/update", HTTP_POST,
-        [](){ webServer.send(200, "text/plain", "OK"); delay(1000); ESP.restart(); },
         [](){
+            if (!webServer.authenticate(config.wwwUser, config.wwwPass)) return webServer.requestAuthentication();
+            webServer.send(200, "text/plain", "OK"); delay(1000); ESP.restart();
+        },
+        [](){
+            if (!webServer.authenticate(config.wwwUser, config.wwwPass)) return;
             HTTPUpload& u = webServer.upload();
             if      (u.status == UPLOAD_FILE_START)  Update.begin((ESP.getFreeSketchSpace()-0x1000) & 0xFFFFF000);
             else if (u.status == UPLOAD_FILE_WRITE)  Update.write(u.buf, u.currentSize);
