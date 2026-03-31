@@ -42,6 +42,16 @@ The firmware implements a "Zero-Touch" provisioning strategy for third-party sto
 2.  **mDNS Advertisement (RFC 6762):** Advertises the `_shelly._tcp` service. This ensures the device is visible to network scanners and automation hubs without needing a static IP or manual configuration.
 3.  **Configurable Service Ports:** Support for both Port **1010** (Legacy Marstek) and Port **2220** (Modern Marstek/Zendure) via a dedicated Emulation UI.
 
+### ⚙️ Core Engine: Memory-Safe DSMR Parser
+
+The heart of SMR-Bridge is a high-performance DSMR P1 parser engineered for zero-allocation execution and minimal SRAM footprint.
+
+*   **Fixed-Point Arithmetic Engine:** To avoid the overhead and precision drift of floating-point math during parsing, the kernel utilizes a fixed-point architecture. Energy and power values are processed as `int64_t` or `int32_t` and only converted to floats at the final serialization layer.
+*   **Streaming Line-Buffered Architecture:** Instead of buffering the entire multi-kilobyte DSMR telegram, the parser uses a deterministic 80-byte stack-allocated line buffer. OBIS tokens are extracted and processed in-flight, allowing the system to handle telegrams of arbitrary length without heap fragmentation.
+*   **Real-time CRC-16/IBM Validation:** Implements a bit-reflected CRC-16 (Polynomial `0xA001`) checksum validation. The hash is calculated byte-by-byte as data arrives from the UART, ensuring that only 100% valid telegrams are promoted to the broadcast and emulation layers.
+*   **SRAM Optimization (PROGMEM):** All OBIS lookup tables and static UI strings are mapped to Instruction Flash (PROGMEM). This keeps the heap free for the TCP stack and WebSocket concurrency, maintaining system stability during high network load.
+*   **Vector Analysis:** Includes a native Power Factor (PF) calculation engine for meters that do not provide OBIS `13.7.0` data, deriving the phase angle from real and apparent power vectors.
+
 ### 🚀 Latest Additions
 
  - **Universal Emulation:** Native Marstek & Zendure support via high-fidelity Shelly API mimicry.
