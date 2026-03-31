@@ -24,7 +24,9 @@
  *
  * 2. SERIAL-TO-TCP BRIDGE:
  * Establishes a high-performance transparent gateway. Incoming serial 
- * telegrams are broadcast to up to 10 concurrent TCP clients on port 2001.
+ * telegrams are aggregated into a 512-byte adaptive broadcast cache to 
+ * minimize WiFi radio airtime and broadcast to up to 10 concurrent 
+ * TCP clients on port 2001.
  *
  * 3. DUAL-WATCHDOG PROTECTION:
  * - Hardware: 8-second hardware timer to recover from CPU lockups.
