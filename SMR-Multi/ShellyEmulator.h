@@ -10,14 +10,13 @@
  * This module implements a "Virtual Energy Meter" layer that encapsulates 
  * high-precision DSMR P1 telegram data into a high-fidelity Shelly Pro 3EM (Gen2)
  * or Shelly 3EM (Gen1) API surface. It is specifically engineered to act as a
- * transparent surrogate for proprietary meters, ensuring native compatibility
- * with Marstek (B2500, Venus, Jupiter) and Zendure (SolarFlow/Hub) energy
- * storage ecosystems.
+ * transparent surrogate for proprietary meters, ensuring native local compatibility
+ * with Marstek (B2500, Venus, Jupiter) energy storage ecosystems.
  *
  * 1. PROTOCOL STACK:
  * - CoAP-Discovery (UDP 5683): Implements the JSON-over-UDP broadcast response 
  *   required for Marstek B2500/Venus/Jupiter auto-provisioning sequences.
- * - RESTful JSON API: Serves /status and  endpoints 
+ * - RESTful JSON API: Serves /status and /rpc/Shelly.GetStatus endpoints 
  *   mimicking the ESP32-based Pro-series firmware behavior.
  * - mDNS (RFC 6762): Advertises _shelly._tcp service for zero-conf network
  *   visibility within modern automation ecosystems.
@@ -57,6 +56,7 @@ extern String      deviceId;
 // Internal instances for the emulator
 ESP8266WebServer* shellyServer = nullptr;
 WiFiUDP           shellyUdp;
+WiFiUDP           marstekUdp;
 bool              emuRunning   = false;
 String            cachedShellyJson;
 char              lastCachedTimestamp[14] = {0};
@@ -133,6 +133,56 @@ void handleShellyStatus() {
 }
 
 /**
+ * Handles Marstek-specific UDP RPC requests (Port 1010/2220).
+ * Uses a flat JSON structure as required by B2500/Venus/Jupiter firmware.
+ */
+void handleMarstekRPC() {
+    if (!emuRunning) return;
+
+    int packetSize = marstekUdp.parsePacket();
+    if (packetSize) {
+        char packetBuffer[256];
+        int len = marstekUdp.read(packetBuffer, 255); // Read up to 255 to leave room for null terminator
+        if (len > 0) packetBuffer[len] = 0;
+
+        JsonDocument requestDoc;
+        DeserializationError error = deserializeJson(requestDoc, packetBuffer);
+        
+        if (!error && requestDoc.containsKey("method") && requestDoc["method"] == "EM.GetStatus") {
+            int requestId = requestDoc["id"] | 1;
+            
+            JsonDocument responseDoc;
+            responseDoc["id"] = requestId;
+            
+            float p1 = dsmr_get_net_power_l1(&dsmr_last_good) * 1000.0;
+            float p2 = dsmr_last_good.is_3phase ? dsmr_get_net_power_l2(&dsmr_last_good) * 1000.0 : 0.0;
+            float p3 = dsmr_last_good.is_3phase ? dsmr_get_net_power_l3(&dsmr_last_good) * 1000.0 : 0.0;
+            
+            responseDoc["a_act_power"]     = p1;
+            responseDoc["b_act_power"]     = p2;
+            responseDoc["c_act_power"]     = p3;
+            responseDoc["total_act_power"] = p1 + p2 + p3;
+            
+            // Optional but recommended fields for high-fidelity emulation
+            responseDoc["a_voltage"] = (float)dsmr_last_good.voltage_l1 / 100.0f;
+            responseDoc["a_current"] = (float)dsmr_last_good.current_l1 / 1000.0f;
+            if (dsmr_last_good.is_3phase) {
+                responseDoc["b_voltage"] = (float)dsmr_last_good.voltage_l2 / 100.0f;
+                responseDoc["b_current"] = (float)dsmr_last_good.current_l2 / 1000.0f;
+                responseDoc["c_voltage"] = (float)dsmr_last_good.voltage_l3 / 100.0f;
+                responseDoc["c_current"] = (float)dsmr_last_good.current_l3 / 1000.0f;
+            }
+
+            marstekUdp.beginPacket(marstekUdp.remoteIP(), marstekUdp.remotePort());
+            serializeJson(responseDoc, marstekUdp);
+            marstekUdp.endPacket();
+            
+            Serial.printf("[MARSTEK] RPC EM.GetStatus from %s (ID: %d)\n", marstekUdp.remoteIP().toString(), requestId);
+        }
+    }
+}
+
+/**
  * Responds to UDP discovery requests on port 5683.
  */
 void handleShellyUDP() {
@@ -159,7 +209,9 @@ void setupShellyEmulator() {
         shellyServer = nullptr;
     }
 
-    shellyServer = new ESP8266WebServer(config.marstekPort);
+    // HTTP server usually runs on port 80 for Shelly Pro series, 
+    // but we can keep it on the config port if specifically needed.
+    shellyServer = new ESP8266WebServer(80); 
     shellyServer->on("/status", handleShellyStatus);
     shellyServer->on("/rpc/Shelly.GetStatus", handleShellyStatus);
     shellyServer->begin();
@@ -168,11 +220,15 @@ void setupShellyEmulator() {
     updateShellyCache();
 
     // Advertise as a Shelly device via mDNS
-    MDNS.addService("shelly", "tcp", config.marstekPort);
+    MDNS.addService("shelly", "tcp", 80);
     
+    // Start UDP Listeners
+    // 1. Standard Shelly Discovery
     if (shellyUdp.begin(5683)) {
+        // 2. Marstek RPC Listener (1010 or 2220)
+        marstekUdp.begin(config.marstekPort);
         emuRunning = true;
-        Serial.printf("[SHELLY] Emulator started on port %u\n", config.marstekPort);
+        Serial.printf("[SHELLY] Emulator active. HTTP:80, UDP Discovery:5683, Marstek RPC:%u\n", config.marstekPort);
     }
 }
 
@@ -181,6 +237,7 @@ void loopShellyEmulator() {
         updateShellyCache();
         if (shellyServer) shellyServer->handleClient();
         handleShellyUDP();
+        handleMarstekRPC();
     }
 }
 

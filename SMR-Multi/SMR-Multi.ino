@@ -1434,14 +1434,14 @@ void setup() {
         logHeap("config_emu:start");
 
         String h = "<html><head><title>Emulation Modes</title>" + String(dashStyle) + "</head><body><div class='container'><h1>EMULATION MODES</h1>"
-                   "<div class='stat diag'>Configure third-party device emulation (e.g. Marstek/Zendure/Shelly).</div>"
+                   "<div class='stat diag'>Configure third-party device emulation (e.g. Marstek/Shelly).</div>"
                    "<form method='POST' action='/saveEmu'>"
                    "<div><label style='display:flex;align-items:center;justify-content:center;'>"
-                   "<input type='checkbox' name='emu_on' value='1' style='width:auto;margin-right:10px;'" + String(config.emuEnabled ? "checked" : "") + ">Enable Shelly/Marstek/Zendure Emulation</label></div>"
+                   "<input type='checkbox' name='emu_on' value='1' style='width:auto;margin-right:10px;'" + String(config.emuEnabled ? "checked" : "") + ">Enable Shelly/Marstek Emulation</label></div>"
                    "<div style='margin-top:20px;'><strong>EMULATOR PORT:</strong>"
                    "<input name='emu_port' type='number' placeholder='Port (Default: 2220)' value='" + String(config.marstekPort) + "'></div>"
                    "<div style='font-size:0.8em;color:#888;margin-bottom:20px; text-align:left;'>"
-                   "&bull; Port 2220: Modern Marstek & Zendure (Shelly Pro 3EM Gen2)<br>"
+                   "&bull; Port 2220: Modern Marstek (Shelly Pro 3EM Gen2)<br>"
                    "&bull; Port 1010: Legacy Marstek (Shelly 3EM Gen1)</div>"
                    "<button class='btn'>SAVE & REBOOT</button></form>"
                    "<a href='/settings' class='btn' style='background:#333;color:#fff;'>BACK</a>" + getFooter() + "</div></body></html>";
